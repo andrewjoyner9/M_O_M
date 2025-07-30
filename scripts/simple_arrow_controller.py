@@ -37,39 +37,40 @@ def set_cube_position(x, y, z):
     return True
 
 def increment_cube_x():
+    #distance = 10  # Distance to move the cube
     """Increment the cube's X position by 1"""
     current_pos = get_cube_position()
-    new_x = current_pos[0] + 1.0
+    new_x = current_pos[0] + 10
     set_cube_position(new_x, current_pos[1], current_pos[2])
 
 def decrement_cube_x():
     """Decrement the cube's X position by 1"""
     current_pos = get_cube_position()
-    new_x = current_pos[0] - 1.0
+    new_x = current_pos[0] - 10
     set_cube_position(new_x, current_pos[1], current_pos[2])
 
 def increment_cube_y():
     """Increment the cube's Y position by 1"""
     current_pos = get_cube_position()
-    new_y = current_pos[1] + 1.0
+    new_y = current_pos[1] + 10
     set_cube_position(current_pos[0], new_y, current_pos[2])
 
 def decrement_cube_y():
     """Decrement the cube's Y position by 1"""
     current_pos = get_cube_position()
-    new_y = current_pos[1] - 1.0
+    new_y = current_pos[1] - 10
     set_cube_position(current_pos[0], new_y, current_pos[2])
 
 def increment_cube_z():
     """Increment the cube's Z position by 1"""
     current_pos = get_cube_position()
-    new_z = current_pos[2] + 1.0
+    new_z = current_pos[2] + 10
     set_cube_position(current_pos[0], current_pos[1], new_z)
 
 def decrement_cube_z():
     """Decrement the cube's Z position by 1"""
     current_pos = get_cube_position()
-    new_z = current_pos[2] - 1.0
+    new_z = current_pos[2] - 10
     set_cube_position(current_pos[0], current_pos[1], new_z)
 
 def on_keyboard_event(event):

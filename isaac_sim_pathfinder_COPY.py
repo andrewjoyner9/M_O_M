@@ -2,7 +2,6 @@ from pxr import UsdGeom, Gf
 import omni
 import asyncio
 import time
-import carb
 
 class IsaacSimPathfinder:
     def __init__(self, cube_path="/World/Cube"):
@@ -10,13 +9,7 @@ class IsaacSimPathfinder:
         self.cube_path = cube_path
         self.stage = omni.usd.get_context().get_stage()
         self.cube_prim = self.stage.GetPrimAtPath(cube_path)
-        self.movement_delay = 1  # Delay between movements in seconds
-        
-        # Path movement state
-        self.current_path = []
-        self.current_step = 0
-        self.is_moving = False
-        self.keyboard_subscription = None
+        self.movement_delay = 0.5  # Delay between movements in seconds
         
     def get_cube_position(self):
         """Get the current position of the cube"""
@@ -88,106 +81,35 @@ class IsaacSimPathfinder:
         print(f"Path calculated with {len(path)} steps")
         return path
 
-    def on_keyboard_event(self, event):
-        """Handle keyboard events for step-by-step movement"""
-        try:
-            import carb
-            if event.type == carb.input.KeyboardEventType.KEY_PRESS:
-                if event.input == carb.input.KeyboardInput.ENTER and self.is_moving:
-                    self.advance_to_next_step()
-                    return True
-        except ImportError:
-            # Fallback for when carb is not available
-            pass
-        return False
-
-    def setup_keyboard_controls(self):
-        """Set up keyboard controls for step-by-step movement"""
-        try:
-            import omni.appwindow
-            import carb
-            
-            app_window = omni.appwindow.get_default_app_window()
-            keyboard = app_window.get_keyboard()
-            
-            if keyboard:
-                input_interface = carb.input.acquire_input_interface()
-                self.keyboard_subscription = input_interface.subscribe_to_keyboard_events(keyboard, self.on_keyboard_event)
-                print("Keyboard controls activated! Press ENTER to advance to next step.")
-                return True
-            else:
-                print("Failed to get keyboard from app window")
-                return False
-        except Exception as e:
-            print(f"Failed to setup keyboard controls: {e}")
-            return False
-
-    def cleanup_keyboard_controls(self):
-        """Clean up keyboard controls"""
-        if self.keyboard_subscription:
-            try:
-                self.keyboard_subscription.unsubscribe()
-                self.keyboard_subscription = None
-                print("Keyboard controls deactivated")
-            except Exception as e:
-                print(f"Error cleaning up keyboard controls: {e}")
-
-    def advance_to_next_step(self):
-        """Move to the next step in the path"""
-        if not self.is_moving or self.current_step >= len(self.current_path):
-            return
-        
-        x, y, z = self.current_path[self.current_step]
-        print(f"Step {self.current_step + 1}/{len(self.current_path)}: Moving to ({x}, {y}, {z})")
-        self.set_cube_position(x, y, z)
-        
-        self.current_step += 1
-        
-        if self.current_step >= len(self.current_path):
-            print("Path movement completed!")
-            self.is_moving = False
-            self.cleanup_keyboard_controls()
-        else:
-            print(f"Press ENTER to continue to step {self.current_step + 1}...")
-
-    def move_along_path_interactive(self, path):
-        """
-        Move the cube along the calculated path with keyboard input for each step
-        """
-        if not path:
-            print("No path to follow!")
-            return
-        
-        print(f"Starting interactive movement along path with {len(path)} steps...")
-        print("Press ENTER to advance to each step...")
-        
-        self.current_path = path
-        self.current_step = 0
-        self.is_moving = True
-        
-        # Set up keyboard controls
-        if self.setup_keyboard_controls():
-            # Move to first step
-            self.advance_to_next_step()
-        else:
-            print("Failed to set up keyboard controls. Falling back to manual mode.")
-            print("Call pathfinder.advance_to_next_step() manually to advance.")
-            # Still set up the state for manual advancement
-            self.advance_to_next_step()
-
     async def move_along_path_async(self, path):
         """
-        Move the cube along the calculated path with keyboard input for each step (non-blocking)
+        Move the cube along the calculated path asynchronously with delays
         """
-        print("Note: Using interactive keyboard-based movement instead of async delays")
-        self.move_along_path_interactive(path)
+        print(f"Starting to move cube along path with {len(path)} steps...")
+        
+        for i, (x, y, z) in enumerate(path):
+            print(f"Step {i+1}/{len(path)}: Moving to ({x}, {y}, {z})")
+            self.set_cube_position(x, y, z)
+            
+            # Wait before next movement
+            await asyncio.sleep(self.movement_delay)
+        
+        print("Path movement completed!")
 
     def move_along_path_blocking(self, path):
         """
-        Move the cube along the calculated path with keyboard input for each step
+        Move the cube along the calculated path with blocking delays
         """
-        print("Note: Using interactive keyboard-based movement instead of blocking delays")
-        self.move_along_path_interactive(path)
+        print(f"Starting to move cube along path with {len(path)} steps...")
+        
+        for i, (x, y, z) in enumerate(path):
+            print(f"Step {i+1}/{len(path)}: Moving to ({x}, {y}, {z})")
+            self.set_cube_position(x, y, z)
+            
+            # Wait before next movement
+            time.sleep(self.movement_delay)
+        
+        print("Path movement completed!")
 
     def move_to_target(self, target_coordinates, use_async=True):
         """
@@ -214,28 +136,20 @@ class IsaacSimPathfinder:
         
         # Move along path
         if use_async:
-            # Both async and blocking now use the same interactive method
-            self.move_along_path_interactive(path)
+            # For async movement, we need to run it in the event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self.move_along_path_async(path))
+            finally:
+                loop.close()
         else:
-            self.move_along_path_interactive(path)
+            self.move_along_path_blocking(path)
 
     def set_movement_speed(self, delay_seconds):
-        """Set the delay between movements (lower = faster movement) - now deprecated as we use user input"""
+        """Set the delay between movements (lower = faster movement)"""
         self.movement_delay = max(0.1, delay_seconds)  # Minimum 0.1 seconds
-        print(f"Movement delay set to {self.movement_delay} seconds (Note: Now using keyboard input instead of time delays)")
-
-    def stop_movement(self):
-        """Stop the current movement and clean up"""
-        self.is_moving = False
-        self.cleanup_keyboard_controls()
-        print("Movement stopped")
-
-    def get_movement_status(self):
-        """Get the current movement status"""
-        if self.is_moving:
-            return f"Moving: Step {self.current_step}/{len(self.current_path)}"
-        else:
-            return "Not moving"
+        print(f"Movement delay set to {self.movement_delay} seconds")
 
 
 # Convenience functions for easy usage
@@ -245,7 +159,7 @@ def move_cube_to_target(target_coordinates, movement_delay=0.5, use_async=True):
     
     Args:
         target_coordinates: (x, y, z) tuple of target position
-        movement_delay: Delay between movements in seconds (deprecated - now uses user input)
+        movement_delay: Delay between movements in seconds
         use_async: Whether to use async movement
     """
     pathfinder = IsaacSimPathfinder()
