@@ -10,7 +10,7 @@ class IsaacSimPathfinder:
         self.cube_path = cube_path
         self.stage = omni.usd.get_context().get_stage()
         self.cube_prim = self.stage.GetPrimAtPath(cube_path)
-        self.movement_delay = 0.5  # Delay between movements in seconds
+        self.movement_delay = 1  # Delay between movements in seconds
         
         # Path movement state
         self.current_path = []
