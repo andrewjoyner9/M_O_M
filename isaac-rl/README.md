@@ -6,12 +6,22 @@ This project implements a reinforcement learning environment for drone navigatio
 
 ```
 isaac-rl/
-├── drone_env.py          # Main RL environment
-├── train.py             # Training script with advanced features
-├── demo.py              # Complete demonstration
-├── test_env.py          # Environment testing
-├── requirements.txt     # Python dependencies
-└── isaac-rl-env/        # Virtual environment
+├── original/                 # Original simple RL environment
+│   ├── drone_env.py         # Basic DroneEnv class
+│   ├── train.py             # Simple training script
+│   ├── demo.py              # Complete demonstration
+│   ├── test_env.py          # Environment testing
+│   └── README.md            # Original environment guide
+├── isaac_sim/               # Isaac Sim integration
+│   ├── isaac_sim_drone_env.py      # Isaac Sim environment
+│   ├── train_isaac_sim.py          # Advanced training script
+│   ├── setup_isaac_sim.py          # Isaac Sim setup
+│   ├── isaac_sim_script_editor_rl.py  # Script Editor version
+│   ├── ISAAC_SIM_GUIDE.md          # Integration guide
+│   └── README.md                    # Isaac Sim guide
+├── requirements.txt         # Python dependencies
+├── isaac-rl-env/           # Virtual environment
+└── README.md               # This file
 ```
 
 ## Environment Description
@@ -36,46 +46,35 @@ The `DroneEnv` simulates a 3D drone navigation task:
 
 ## Getting Started
 
-### 1. Environment Setup
+Choose your path based on your needs:
 
-The virtual environment is already configured. To activate it manually:
-
-```bash
-source isaac-rl-env/bin/activate
-```
-
-### 2. Test the Environment
+### Option 1: Original Simple Environment (Recommended for Learning)
 
 ```bash
+cd original
+
+# Test the environment
 python test_env.py
-```
 
-This will verify the environment works correctly and show sample interactions.
-
-### 3. Run the Complete Demo
-
-```bash
+# Run complete demo
 python demo.py
-```
 
-This demonstrates:
-- Environment basics
-- Hand-coded smart agent (for comparison)
-- RL training with PPO
-- Testing the trained agent
-
-### 4. Full Training
-
-```bash
+# Full training
 python train.py
 ```
 
-Features:
-- Advanced PPO configuration
-- Evaluation callbacks
-- Early stopping on reward threshold
-- Tensorboard logging
-- Model testing after training
+### Option 2: Isaac Sim Integration (Advanced Physics)
+
+```bash
+cd isaac_sim
+
+# Test without Isaac Sim (fallback mode)
+python train_isaac_sim.py --mode demo --no-isaac
+
+# With Isaac Sim (requires installation)
+# 1. Launch Isaac Sim
+# 2. In Script Editor: exec(open("isaac_sim_script_editor_rl.py").read())
+```
 
 ## Key Components
 
@@ -153,12 +152,53 @@ model = PPO(
 
 ## Next Steps
 
-1. **Isaac Sim Integration**: Replace simple physics with Isaac Sim
+1. **Isaac Sim Integration**: Replace simple physics with Isaac Sim ✅
+   - See `ISAAC_SIM_GUIDE.md` for detailed instructions
+   - Use `isaac_sim_drone_env.py` for full physics simulation
+   - Run `python train_isaac_sim.py --mode demo` to test
 2. **Complex Environments**: Add multiple threats, moving obstacles
 3. **Sensor Simulation**: Add camera, lidar, or other sensors
 4. **Multi-Agent**: Multiple drones with cooperation/competition
 5. **Curriculum Learning**: Gradually increase difficulty
 6. **Domain Randomization**: Vary environment parameters
+
+## Isaac Sim Integration (NEW!)
+
+The project now includes full Isaac Sim integration for realistic physics simulation:
+
+### Quick Start with Isaac Sim
+
+```bash
+# Test with fallback simulation (works without Isaac Sim)
+python train_isaac_sim.py --mode demo --no-isaac
+
+# Train with Isaac Sim physics (requires Isaac Sim installation)
+python train_isaac_sim.py --mode train --timesteps 20000
+
+# Test trained model
+python train_isaac_sim.py --mode test --model isaac_sim_drone_model
+```
+
+### Key Features
+
+- **Automatic Fallback**: Works with or without Isaac Sim installed
+- **Realistic Physics**: PhysX engine when Isaac Sim is available
+- **3D Visualization**: Real-time drone movement in 3D environment
+- **Same API**: Consistent interface regardless of backend
+
+### Files
+
+- `original/` - Simple RL environment for learning and quick prototyping
+- `isaac_sim/` - Advanced Isaac Sim integration with realistic physics
+- `requirements.txt` - Python dependencies
+- `isaac-rl-env/` - Virtual environment
+
+See individual folder READMEs for detailed usage instructions.
+
+### Requirements
+
+- **Optional**: Isaac Sim 4.5.0+ via Omniverse Launcher
+- **Fallback**: Works with existing gymnasium environment
 
 ## Troubleshooting
 
