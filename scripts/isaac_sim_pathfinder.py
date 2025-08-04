@@ -627,25 +627,25 @@ if __name__ == "__main__":
     
     print("\nExample 2: Test basic functionality")
     # Uncomment the line below to test basic movement
-    # test_basic_movement()
+    test_basic_movement()
     
     print("\nExample 3: Test pathfinding algorithm")
     # Uncomment the line below to test pathfinding
-    # test_pathfinding()
+    test_pathfinding()
     
     print("\nExample 4: Test custom path")
     # Uncomment the line below to test custom path
-    # test_custom_path()
+    test_custom_path()
     
     print("\nExample 5: Test obstacle avoidance")
     # Uncomment the line below to test obstacle avoidance
-    # test_obstacle_avoidance()
+    test_obstacle_avoidance()
     
     print("\nExample 6: Test scene obstacle detection")
     # Uncomment the line below to test scene-based obstacle detection
-    # test_scene_obstacle_detection()
+    test_scene_obstacle_detection()
     
-    print("\nExample 7: Test dynamic obstacles")
+    # print("\nExample 7: Test dynamic obstacles")
     # Uncomment the line below to test dynamic obstacle handling
     # test_dynamic_obstacles()
     
