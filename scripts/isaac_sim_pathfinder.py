@@ -545,7 +545,7 @@ def test_obstacle_avoidance():
     pathfinder = IsaacSimPathfinder()
     
     # Add some obstacles
-    pathfinder.add_obstacle(1, 0, 0)
+    pathfinder.add_obstacle(1, 0, 1)
     pathfinder.add_obstacle(2, 0, 0)
     pathfinder.add_obstacle(3, 0, 0)
     pathfinder.add_obstacle(1, 1, 0)
@@ -554,11 +554,11 @@ def test_obstacle_avoidance():
     print(f"Added {len(pathfinder.obstacles)} obstacles")
     
     # Set starting position
-    start_pos = (0, 0, 0)
+    start_pos = (0, 0, 1)
     pathfinder.set_cube_position(*start_pos)
     
     # Try to move to target (should go around obstacles)
-    target_pos = (4, 0, 0)
+    target_pos = (4, 0, 1)
     pathfinder.move_to_target(target_pos, use_async=False)
 
 
@@ -622,28 +622,28 @@ if __name__ == "__main__":
     print()
     
     # Example usage:
-    print("Example 1: Move from current position to (5, 5, 5)")
-    move_cube_to_target((5, 5, 5), movement_delay=0.5)
+    # print("Example 1: Move from current position to (5, 5, 5)")
+    # move_cube_to_target((5, 5, 5), movement_delay=0.5)
     
-    print("\nExample 2: Test basic functionality")
+    # print("\nExample 2: Test basic functionality")
     # Uncomment the line below to test basic movement
-    test_basic_movement()
-    
-    print("\nExample 3: Test pathfinding algorithm")
+    # test_basic_movement()
+
+    # print("\nExample 3: Test pathfinding algorithm")
     # Uncomment the line below to test pathfinding
-    test_pathfinding()
-    
-    print("\nExample 4: Test custom path")
+    # test_pathfinding()
+
+    # print("\nExample 4: Test custom path")
     # Uncomment the line below to test custom path
-    test_custom_path()
+    # test_custom_path()
     
     print("\nExample 5: Test obstacle avoidance")
     # Uncomment the line below to test obstacle avoidance
     test_obstacle_avoidance()
     
-    print("\nExample 6: Test scene obstacle detection")
+    # print("\nExample 6: Test scene obstacle detection")
     # Uncomment the line below to test scene-based obstacle detection
-    test_scene_obstacle_detection()
+    # test_scene_obstacle_detection()
     
     # print("\nExample 7: Test dynamic obstacles")
     # Uncomment the line below to test dynamic obstacle handling
