@@ -31,4 +31,6 @@ cubeGeom.AddTranslateOp().Set(offset)
 # Attach Rigid Body and Collision Preset
 rigid_api = UsdPhysics.RigidBodyAPI.Apply(cubePrim)
 rigid_api.CreateRigidBodyEnabledAttr(True)
+# Disable gravity for this cube
+rigid_api.CreateKinematicEnabledAttr(True)
 UsdPhysics.CollisionAPI.Apply(cubePrim)
