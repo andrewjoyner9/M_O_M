@@ -1,1 +1,65 @@
+# Virtual Environment
 isaac-rl/isaac-rl-env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Machine Learning Models
+*.zip
+*.pkl
+*.bin
+*.h5
+*.ckpt
+*.pth
+*.pt
+
+# Tensorboard logs
+*tensorboard*/
+runs/
+logs/
+tb_logs/
+
+# Training outputs
+*.log
+wandb/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Isaac Sim specific
+*.usda
+*.usd
