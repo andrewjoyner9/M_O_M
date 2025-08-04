@@ -52,23 +52,33 @@ class IsaacSimPathfinder:
         print(f"Cube moved to position: ({x}, {y}, {z})")
         return True
 
-    def add_obstacle(self, x, y, z):
+    def add_obstacle(self, x, y, z, create_sphere=True):
         """Add an obstacle at the specified coordinates"""
-        self.obstacles.add((int(x), int(y), int(z)))
+        coord = (int(x), int(y), int(z))
+        self.obstacles.add(coord)
         print(f"Obstacle added at ({x}, {y}, {z})")
+        
+        # Optionally create a visual sphere for the obstacle
+        if create_sphere:
+            self._create_single_obstacle_sphere(coord)
 
-    def remove_obstacle(self, x, y, z):
+    def remove_obstacle(self, x, y, z, remove_sphere=True):
         """Remove an obstacle at the specified coordinates"""
         coord = (int(x), int(y), int(z))
         if coord in self.obstacles:
             self.obstacles.remove(coord)
             print(f"Obstacle removed from ({x}, {y}, {z})")
+            
+            # Optionally remove the visualization sphere
+            if remove_sphere:
+                self._remove_single_obstacle_sphere(coord)
         else:
             print(f"No obstacle found at ({x}, {y}, {z})")
 
     def clear_obstacles(self):
-        """Clear all manually added obstacles"""
+        """Clear all manually added obstacles and their spheres"""
         self.obstacles.clear()
+        self.remove_obstacle_spheres()
         print("All manual obstacles cleared")
 
     def add_obstacle_prim_path(self, prim_path):
@@ -126,32 +136,27 @@ class IsaacSimPathfinder:
         # Detect obstacles from scene first
         self.detect_obstacles_from_scene()
         
-        print(f"Planning path from {start} to {end}")
-        print(f"Known obstacles: {len(self.obstacles)} positions")
+        print(f"Planning path from {start} to {end} with {len(self.obstacles)} obstacles")
         
         # Check if start or end positions are blocked
         if self.is_position_blocked(*start):
-            print(f"Error: Start position {start} is blocked by an obstacle!")
+            print(f"Error: Start position {start} is blocked!")
             return []
         
         if self.is_position_blocked(*end):
-            print(f"Error: End position {end} is blocked by an obstacle!")
+            print(f"Error: End position {end} is blocked!")
             return []
         
         # A* algorithm implementation
         def heuristic(pos1, pos2):
-            """Manhattan distance heuristic"""
             return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1]) + abs(pos1[2] - pos2[2])
         
-        # Priority queue: (f_score, g_score, position)
         open_set = [(0, 0, start)]
         came_from = {}
         g_score = {start: 0}
-        f_score = {start: heuristic(start, end)}
         closed_set = set()
         
         while open_set:
-            # Get position with lowest f_score
             current_f, current_g, current = heapq.heappop(open_set)
             
             if current in closed_set:
@@ -169,7 +174,6 @@ class IsaacSimPathfinder:
             
             closed_set.add(current)
             
-            # Check all neighbors
             for neighbor in self.get_neighbors(*current):
                 if neighbor in closed_set:
                     continue
@@ -179,77 +183,10 @@ class IsaacSimPathfinder:
                 if neighbor not in g_score or tentative_g < g_score[neighbor]:
                     came_from[neighbor] = current
                     g_score[neighbor] = tentative_g
-                    f_score[neighbor] = tentative_g + heuristic(neighbor, end)
-                    heapq.heappush(open_set, (f_score[neighbor], tentative_g, neighbor))
+                    f_score = tentative_g + heuristic(neighbor, end)
+                    heapq.heappush(open_set, (f_score, tentative_g, neighbor))
         
-        print("No path found! Target may be unreachable due to obstacles.")
-        return []
-
-    def find_path_simple(self, start, end):
-        """
-        Find a path using simple line algorithm (ignores obstacles) - kept for fallback
-        Returns a list of 3D coordinate tuples representing the path
-        """
-        path = []
-        x, y, z = start
-        end_x, end_y, end_z = end
-
-        print(f"Planning simple path from {start} to {end}")
-        
-        while (x, y, z) != (end_x, end_y, end_z):
-            # Move in X direction first
-            if x < end_x:
-                x += 1
-            elif x > end_x:
-                x -= 1
-
-            # Then move in Y direction
-            if y < end_y:
-                y += 1
-            elif y > end_y:
-                y -= 1
-
-            # Finally move in Z direction
-            if z < end_z:
-                z += 1
-            elif z > end_z:
-                z -= 1
-
-            path.append((x, y, z))
-        
-        print(f"Simple path calculated with {len(path)} steps")
-        return path
-
-    def validate_path(self, path):
-        """Check if a path is clear of obstacles"""
-        blocked_positions = []
-        for step, (x, y, z) in enumerate(path):
-            if self.is_position_blocked(x, y, z):
-                blocked_positions.append((step, (x, y, z)))
-        
-        if blocked_positions:
-            print(f"Warning: Path has {len(blocked_positions)} blocked positions:")
-            for step, pos in blocked_positions:
-                print(f"  Step {step + 1}: {pos}")
-            return False
-        return True
-
-    def replan_if_blocked(self, start, end):
-        """Try to find an alternative path if the current path is blocked"""
-        print("Attempting to replan path to avoid obstacles...")
-        
-        # First try A* algorithm
-        path = self.find_path(start, end)
-        if path and self.validate_path(path):
-            return path
-        
-        # If A* fails, try simple path as fallback
-        print("A* pathfinding failed, trying simple pathfinding...")
-        simple_path = self.find_path_simple(start, end)
-        if self.validate_path(simple_path):
-            return simple_path
-        
-        print("Both pathfinding methods failed due to obstacles.")
+        print("No path found! Target may be unreachable.")
         return []
 
     def on_keyboard_event(self, event):
@@ -305,7 +242,7 @@ class IsaacSimPathfinder:
         
         # Check if the next position is blocked by an obstacle
         if self.is_position_blocked(x, y, z):
-            print(f"Warning: Next position ({x}, {y}, {z}) is blocked by an obstacle!")
+            print(f"Warning: Next position ({x}, {y}, {z}) is blocked!")
             print("Attempting to replan path...")
             
             # Get current position and remaining target
@@ -317,12 +254,11 @@ class IsaacSimPathfinder:
                 final_destination = self.current_path[-1]
                 
                 # Try to find a new path
-                new_path = self.replan_if_blocked(current_coords, final_destination)
+                new_path = self.find_path(current_coords, final_destination)
                 if new_path:
                     print("Successfully replanned path!")
                     self.current_path = new_path
                     self.current_step = 0
-                    # Continue with the new path
                     x, y, z = self.current_path[self.current_step]
                 else:
                     print("Failed to find alternative path. Stopping movement.")
@@ -372,27 +308,12 @@ class IsaacSimPathfinder:
             # Still set up the state for manual advancement
             self.advance_to_next_step()
 
-    async def move_along_path_async(self, path):
-        """
-        Move the cube along the calculated path with keyboard input for each step (non-blocking)
-        """
-        print("Note: Using interactive keyboard-based movement instead of async delays")
-        self.move_along_path_interactive(path)
-
-    def move_along_path_blocking(self, path):
-        """
-        Move the cube along the calculated path with keyboard input for each step
-        """
-        print("Note: Using interactive keyboard-based movement instead of blocking delays")
-        self.move_along_path_interactive(path)
-
-    def move_to_target(self, target_coordinates, use_async=True):
+    def move_to_target(self, target_coordinates):
         """
         Move the cube from its current position to target coordinates
         
         Args:
             target_coordinates: (x, y, z) tuple of target position
-            use_async: Whether to use async movement (default: True)
         """
         # Get current position and convert to integer coordinates for pathfinding
         current_pos = self.get_cube_position()
@@ -410,31 +331,9 @@ class IsaacSimPathfinder:
             return
         
         # Move along path
-        if use_async:
-            # Both async and blocking now use the same interactive method
-            self.move_along_path_interactive(path)
-        else:
-            self.move_along_path_interactive(path)
+        self.move_along_path_interactive(path)
 
-    def set_movement_speed(self, delay_seconds):
-        """Set the delay between movements (lower = faster movement) - now deprecated as we use user input"""
-        self.movement_delay = max(0.1, delay_seconds)  # Minimum 0.1 seconds
-        print(f"Movement delay set to {self.movement_delay} seconds (Note: Now using keyboard input instead of time delays)")
-
-    def stop_movement(self):
-        """Stop the current movement and clean up"""
-        self.is_moving = False
-        self.cleanup_keyboard_controls()
-        print("Movement stopped")
-
-    def get_movement_status(self):
-        """Get the current movement status"""
-        if self.is_moving:
-            return f"Moving: Step {self.current_step}/{len(self.current_path)}"
-        else:
-            return "Not moving"
-
-    def create_wall_obstacle(self, start_pos, end_pos, axis='x'):
+    def create_wall_obstacle(self, start_pos, end_pos, axis='x', create_spheres=True):
         """Create a wall of obstacles between two points along a specified axis"""
         start_x, start_y, start_z = start_pos
         end_x, end_y, end_z = end_pos
@@ -443,113 +342,180 @@ class IsaacSimPathfinder:
         
         if axis == 'x':
             for x in range(min(start_x, end_x), max(start_x, end_x) + 1):
-                self.add_obstacle(x, start_y, start_z)
+                self.add_obstacle(x, start_y, start_z, create_sphere=create_spheres)
                 obstacles_added += 1
         elif axis == 'y':
             for y in range(min(start_y, end_y), max(start_y, end_y) + 1):
-                self.add_obstacle(start_x, y, start_z)
+                self.add_obstacle(start_x, y, start_z, create_sphere=create_spheres)
                 obstacles_added += 1
         elif axis == 'z':
             for z in range(min(start_z, end_z), max(start_z, end_z) + 1):
-                self.add_obstacle(start_x, start_y, z)
+                self.add_obstacle(start_x, start_y, z, create_sphere=create_spheres)
                 obstacles_added += 1
         
         print(f"Created wall obstacle with {obstacles_added} blocks along {axis}-axis")
+        return obstacles_added
+
+    def _remove_single_obstacle_sphere(self, coord):
+        """Remove a single obstacle visualization sphere"""
+        try:
+            x, y, z = coord
+            sphere_path = f"/World/ObstacleSphere_{x}_{y}_{z}"
+            material_path = f"/World/Materials/ObstacleMaterial_{x}_{y}_{z}"
+            
+            # Remove sphere
+            sphere_prim = self.stage.GetPrimAtPath(sphere_path)
+            if sphere_prim and sphere_prim.IsValid():
+                self.stage.RemovePrim(sphere_prim.GetPath())
+                print(f"Removed obstacle sphere at ({x}, {y}, {z})")
+            
+            # Remove material
+            material_prim = self.stage.GetPrimAtPath(material_path)
+            if material_prim and material_prim.IsValid():
+                self.stage.RemovePrim(material_prim.GetPath())
+                
+        except Exception as e:
+            print(f"Error removing visualization sphere at {coord}: {e}")
+
+    def _create_single_obstacle_sphere(self, coord, sphere_radius=0.3, color=(1.0, 0.0, 0.0)):
+        """Create a single sphere primitive to visualize an obstacle"""
+        try:
+            from pxr import UsdGeom, UsdShade, Sdf
+            
+            x, y, z = coord
+            sphere_path = f"/World/ObstacleSphere_{x}_{y}_{z}"
+            
+            # Check if sphere already exists
+            existing_prim = self.stage.GetPrimAtPath(sphere_path)
+            if existing_prim and existing_prim.IsValid():
+                return sphere_path
+            
+            # Create sphere primitive
+            sphere_geom = UsdGeom.Sphere.Define(self.stage, sphere_path)
+            
+            # Set sphere properties
+            sphere_geom.CreateRadiusAttr(sphere_radius)
+            
+            # Position the sphere
+            xform = UsdGeom.Xformable(sphere_geom)
+            xform.AddTranslateOp().Set((float(x), float(y), float(z)))
+            
+            # Create material for coloring
+            material_path = f"/World/Materials/ObstacleMaterial_{x}_{y}_{z}"
+            material = UsdShade.Material.Define(self.stage, material_path)
+            
+            # Create shader
+            shader = UsdShade.Shader.Define(self.stage, f"{material_path}/PBRShader")
+            shader.CreateIdAttr("UsdPreviewSurface")
+            shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(color)
+            shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+            shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.5)
+            
+            # Connect shader to material
+            material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+            
+            # Bind material to sphere
+            UsdShade.MaterialBindingAPI(sphere_geom).Bind(material)
+            
+            print(f"Created visualization sphere at ({x}, {y}, {z})")
+            return sphere_path
+            
+        except Exception as e:
+            print(f"Error creating visualization sphere at {coord}: {e}")
+            return None
+
+    def create_obstacle_spheres(self, sphere_radius=0.3, color=(1.0, 0.0, 0.0)):
+        """Create sphere primitives to visualize obstacles in the scene"""
+        from pxr import UsdGeom, UsdShade, Sdf
+        
+        created_spheres = []
+        
+        for i, (x, y, z) in enumerate(self.obstacles):
+            # Create unique sphere path
+            sphere_path = f"/World/ObstacleSphere_{i}_{x}_{y}_{z}"
+            
+            # Check if sphere already exists
+            existing_prim = self.stage.GetPrimAtPath(sphere_path)
+            if existing_prim and existing_prim.IsValid():
+                print(f"Sphere already exists at {sphere_path}")
+                continue
+            
+            try:
+                # Create sphere primitive
+                sphere_geom = UsdGeom.Sphere.Define(self.stage, sphere_path)
+                
+                # Set sphere properties
+                sphere_geom.CreateRadiusAttr(sphere_radius)
+                
+                # Position the sphere
+                xform = UsdGeom.Xformable(sphere_geom)
+                xform.AddTranslateOp().Set((float(x), float(y), float(z)))
+                
+                # Create material for coloring
+                material_path = f"/World/Materials/ObstacleMaterial_{i}"
+                material = UsdShade.Material.Define(self.stage, material_path)
+                
+                # Create shader
+                shader = UsdShade.Shader.Define(self.stage, f"{material_path}/PBRShader")
+                shader.CreateIdAttr("UsdPreviewSurface")
+                shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(color)
+                shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+                shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.5)
+                
+                # Connect shader to material
+                material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+                
+                # Bind material to sphere
+                UsdShade.MaterialBindingAPI(sphere_geom).Bind(material)
+                
+                created_spheres.append(sphere_path)
+                print(f"Created obstacle sphere at ({x}, {y}, {z}) -> {sphere_path}")
+                
+            except Exception as e:
+                print(f"Error creating sphere at ({x}, {y}, {z}): {e}")
+        
+        print(f"Created {len(created_spheres)} obstacle visualization spheres")
+        return created_spheres
+
+    def remove_obstacle_spheres(self):
+        """Remove all obstacle visualization spheres from the scene"""
+        removed_count = 0
+        
+        # Find all obstacle spheres
+        for prim in self.stage.Traverse():
+            prim_path = str(prim.GetPath())
+            if "ObstacleSphere_" in prim_path or "ObstacleMaterial_" in prim_path:
+                try:
+                    self.stage.RemovePrim(prim.GetPath())
+                    removed_count += 1
+                except Exception as e:
+                    print(f"Error removing {prim_path}: {e}")
+        
+        print(f"Removed {removed_count} obstacle visualization elements")
+        return removed_count
 
     def get_obstacle_info(self):
-        """Get information about current obstacles"""
+        """Get basic information about current obstacles"""
         manual_obstacles = len(self.obstacles)
         scene_prims = len(self.obstacle_prims)
         
-        print(f"Obstacle Status:")
-        print(f"  Manual obstacles: {manual_obstacles}")
-        print(f"  Scene primitive paths: {scene_prims}")
-        print(f"  Detection radius: {self.detection_radius}")
-        
+        print(f"Obstacles: {manual_obstacles} manual, {scene_prims} scene prims")
         if self.obstacles:
-            print(f"  Obstacle positions: {sorted(list(self.obstacles))}")
+            print(f"Positions: {sorted(list(self.obstacles))}")
         
-        return {
-            'manual_obstacles': manual_obstacles,
-            'scene_prims': scene_prims,
-            'positions': list(self.obstacles),
-            'detection_radius': self.detection_radius
-        }
+        return list(self.obstacles)
 
 
-# Convenience functions for easy usage
-def move_cube_to_target(target_coordinates, movement_delay=0.5, use_async=True):
-    """
-    Convenience function to move cube to target coordinates
-    
-    Args:
-        target_coordinates: (x, y, z) tuple of target position
-        movement_delay: Delay between movements in seconds (deprecated - now uses user input)
-        use_async: Whether to use async movement
-    """
-    pathfinder = IsaacSimPathfinder()
-    pathfinder.set_movement_speed(movement_delay)
-    pathfinder.move_to_target(target_coordinates, use_async)
-
-
-# Example usage and test functions
-def test_basic_movement():
-    """Test basic movement functionality"""
-    print("=== Testing Basic Movement ===")
+# Simple example usage
+def run_example():
+    """Simple example of how to use the pathfinder"""
+    print("=== Isaac Sim Pathfinder Example ===")
     pathfinder = IsaacSimPathfinder()
     
-    # Test getting current position
-    current_pos = pathfinder.get_cube_position()
-    print(f"Current position: {current_pos}")
-    
-    # Test setting position
-    pathfinder.set_cube_position(1, 1, 1)
-    
-    # Test getting position again
-    new_pos = pathfinder.get_cube_position()
-    print(f"New position: {new_pos}")
-
-
-def test_pathfinding():
-    """Test pathfinding from (0,0,0) to (5,5,5)"""
-    print("=== Testing Pathfinding ===")
-    pathfinder = IsaacSimPathfinder()
-    
-    # Set cube to starting position
-    start_pos = (0, 0, 0)
-    pathfinder.set_cube_position(*start_pos)
-    
-    # Move to target
-    target_pos = (5, 5, 5)
-    pathfinder.move_to_target(target_pos, use_async=False)
-
-
-def test_custom_path():
-    """Test with custom start and end coordinates"""
-    print("=== Testing Custom Path ===")
-    pathfinder = IsaacSimPathfinder()
-    pathfinder.set_movement_speed(0.3)  # Faster movement
-    
-    # Set custom starting position
-    start_pos = (2, -1, 3)
-    pathfinder.set_cube_position(*start_pos)
-    
-    # Move to custom target
-    target_pos = (-2, 4, 0)
-    pathfinder.move_to_target(target_pos, use_async=False)
-
-
-def test_obstacle_avoidance():
-    """Test pathfinding with obstacles"""
-    print("=== Testing Obstacle Avoidance ===")
-    pathfinder = IsaacSimPathfinder()
-    
-    # Add some obstacles
+    # Add some obstacles with visualization
     pathfinder.add_obstacle(1, 0, 1)
     pathfinder.add_obstacle(2, 0, 0)
     pathfinder.add_obstacle(3, 0, 0)
-    pathfinder.add_obstacle(1, 1, 0)
-    pathfinder.add_obstacle(2, 1, 0)
     
     print(f"Added {len(pathfinder.obstacles)} obstacles")
     
@@ -557,107 +523,26 @@ def test_obstacle_avoidance():
     start_pos = (0, 0, 1)
     pathfinder.set_cube_position(*start_pos)
     
-    # Try to move to target (should go around obstacles)
+    # Move to target (will find path around obstacles)
     target_pos = (4, 0, 1)
-    pathfinder.move_to_target(target_pos, use_async=False)
-
-
-def test_scene_obstacle_detection():
-    """Test detecting obstacles from scene primitives"""
-    print("=== Testing Scene Obstacle Detection ===")
-    pathfinder = IsaacSimPathfinder()
-    
-    # Add some primitive paths that might contain obstacles
-    # Note: These paths should exist in your Isaac Sim scene
-    pathfinder.add_obstacle_prim_path("/World/Obstacle1")
-    pathfinder.add_obstacle_prim_path("/World/Obstacle2")
-    pathfinder.add_obstacle_prim_path("/World/Wall")
-    
-    # Detect obstacles from scene
-    detected = pathfinder.detect_obstacles_from_scene()
-    print(f"Detected {len(detected)} obstacles from scene")
-    
-    # Set starting position
-    start_pos = (0, 0, 0)
-    pathfinder.set_cube_position(*start_pos)
-    
-    # Move to target
-    target_pos = (5, 5, 0)
-    pathfinder.move_to_target(target_pos, use_async=False)
-
-
-def test_dynamic_obstacles():
-    """Test adding obstacles dynamically during movement"""
-    print("=== Testing Dynamic Obstacles ===")
-    pathfinder = IsaacSimPathfinder()
-    
-    # Set starting position
-    start_pos = (0, 0, 0)
-    pathfinder.set_cube_position(*start_pos)
-    
-    # Start movement to target
-    target_pos = (5, 0, 0)
-    print("Starting movement...")
-    
-    # Calculate initial path
-    path = pathfinder.find_path(start_pos, target_pos)
-    if path:
-        pathfinder.current_path = path
-        pathfinder.current_step = 0
-        pathfinder.is_moving = True
-        
-        print(f"Initial path: {path}")
-        print("You can now add obstacles using:")
-        print("  pathfinder.add_obstacle(x, y, z)")
-        print("Then continue movement with:")
-        print("  pathfinder.advance_to_next_step()")
-    else:
-        print("Failed to find initial path")
+    pathfinder.move_to_target(target_pos)
 
 
 if __name__ == "__main__":
     print("=== Isaac Sim Pathfinder with Obstacle Avoidance ===")
     print("This script moves a cube along a calculated path in Isaac Sim 4.5.0")
-    print("Now includes obstacle detection and avoidance capabilities!")
+    print("Includes obstacle detection and avoidance with sphere visualization!")
     print()
     
-    # Example usage:
-    # print("Example 1: Move from current position to (5, 5, 5)")
-    # move_cube_to_target((5, 5, 5), movement_delay=0.5)
-    
-    # print("\nExample 2: Test basic functionality")
-    # Uncomment the line below to test basic movement
-    # test_basic_movement()
-
-    # print("\nExample 3: Test pathfinding algorithm")
-    # Uncomment the line below to test pathfinding
-    # test_pathfinding()
-
-    # print("\nExample 4: Test custom path")
-    # Uncomment the line below to test custom path
-    # test_custom_path()
-    
-    print("\nExample 5: Test obstacle avoidance")
-    # Uncomment the line below to test obstacle avoidance
-    test_obstacle_avoidance()
-    
-    # print("\nExample 6: Test scene obstacle detection")
-    # Uncomment the line below to test scene-based obstacle detection
-    # test_scene_obstacle_detection()
-    
-    # print("\nExample 7: Test dynamic obstacles")
-    # Uncomment the line below to test dynamic obstacle handling
-    # test_dynamic_obstacles()
+    # Run the simple example
+    run_example()
     
     print("\n" + "="*50)
-    print("OBSTACLE DETECTION FEATURES:")
+    print("CORE FEATURES:")
     print("="*50)
-    print("• add_obstacle(x, y, z) - Add manual obstacle")
-    print("• remove_obstacle(x, y, z) - Remove obstacle")
-    print("• clear_obstacles() - Clear all manual obstacles")
-    print("• add_obstacle_prim_path(path) - Track scene objects as obstacles")
-    print("• detect_obstacles_from_scene() - Auto-detect from scene")
-    print("• is_position_blocked(x, y, z) - Check if position has obstacle")
-    print("• validate_path(path) - Check if path is clear")
-    print("• replan_if_blocked(start, end) - Find alternative path")
+    print("• add_obstacle(x, y, z) - Add obstacle with red sphere visualization")
+    print("• move_to_target(target) - Move cube to target, avoiding obstacles")
+    print("• create_wall_obstacle(start, end, axis) - Create wall of obstacles")
+    print("• remove_obstacle_spheres() - Clear all obstacle visualizations")
+    print("• Press ENTER during movement to advance step-by-step")
     print("="*50)
