@@ -17,6 +17,8 @@ class IsaacSimPathfinder:
         self.current_step = 0
         self.is_moving = False
         self.keyboard_subscription = None
+        self.input_interface = None
+        self.keyboard = None  # Add this line
         
         # Obstacle detection
         self.obstacles = set()  # Set of (x, y, z) tuples representing obstacle positions
@@ -275,8 +277,9 @@ class IsaacSimPathfinder:
             keyboard = app_window.get_keyboard()
             
             if keyboard:
-                input_interface = carb.input.acquire_input_interface()
-                self.keyboard_subscription = input_interface.subscribe_to_keyboard_events(keyboard, self.on_keyboard_event)
+                self.keyboard = keyboard  # Store keyboard reference for cleanup
+                self.input_interface = carb.input.acquire_input_interface()
+                self.keyboard_subscription = self.input_interface.subscribe_to_keyboard_events(keyboard, self.on_keyboard_event)
                 print("Keyboard controls activated! Press ENTER to advance to next step.")
                 return True
             else:
@@ -288,9 +291,19 @@ class IsaacSimPathfinder:
 
     def cleanup_keyboard_controls(self):
         """Clean up keyboard controls"""
-        if self.keyboard_subscription:
+        if self.keyboard_subscription is not None:
             try:
-                self.keyboard_subscription.unsubscribe()
+                if hasattr(self, 'input_interface') and self.input_interface:
+                    # Store the keyboard reference for cleanup
+                    if hasattr(self, 'keyboard') and self.keyboard:
+                        self.input_interface.unsubscribe_to_keyboard_events(self.keyboard, self.keyboard_subscription)
+                    else:
+                        # Try to get keyboard again for cleanup
+                        import omni.appwindow
+                        app_window = omni.appwindow.get_default_app_window()
+                        keyboard = app_window.get_keyboard()
+                        if keyboard:
+                            self.input_interface.unsubscribe_to_keyboard_events(keyboard, self.keyboard_subscription)
                 self.keyboard_subscription = None
                 print("Keyboard controls deactivated")
             except Exception as e:
