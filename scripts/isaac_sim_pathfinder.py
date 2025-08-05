@@ -534,7 +534,7 @@ if __name__ == "__main__":
     print("Includes obstacle detection and avoidance with sphere visualization!")
     print()
     
-    # Run the simple example
+    # Run the simple example function
     run_example()
     
     print("\n" + "="*50)
