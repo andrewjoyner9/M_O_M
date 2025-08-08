@@ -1,7 +1,5 @@
 from __future__ import annotations
 import torch, numpy as np
-import hydra
-from omegaconf import DictConfig
 from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
 from isaaclab.sim.spawners.single_instance import clone_env
 from isaac_world import IsaacSimPathfinder
@@ -12,7 +10,11 @@ from isaac_world import IsaacSimPathfinder
 class DroneLabCfg(DirectRLEnvCfg):
     num_envs = 64
     episode_length_s = 20.0
-    sim.dt = 1.0 / 60
+    
+    # Simulation settings
+    def __post_init__(self):
+        super().__post_init__()
+        self.sim.dt = 1.0 / 60
 
     # task-specific knobs go in the `env` dict so they are Hydra-tunable
     env: dict = dict(
@@ -136,8 +138,7 @@ class DroneVectorTask(DirectRLEnv):
 # --------------------------------------------------------------------- #
 # 3.  Minimal Hydra entry to smoke-test                                 #
 # --------------------------------------------------------------------- #
-@hydra.main(version_base=None, config_name=None)
-def main(_cfg: DictConfig):
+def main(_cfg=None):
     env = DroneVectorTask(DroneLabCfg)
     print("vectorised env ready:", env.num_envs, "envs")
 
@@ -152,4 +153,14 @@ def main(_cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    main()
+    # Only import hydra when running this script directly
+    try:
+        import hydra
+        from omegaconf import DictConfig
+        
+        # Decorate main function with hydra
+        hydra_main = hydra.main(version_base=None, config_name=None)(main)
+        hydra_main()
+    except ImportError:
+        print("Hydra not available, running without configuration management")
+        main()

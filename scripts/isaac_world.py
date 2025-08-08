@@ -61,17 +61,25 @@ class IsaacSimPathfinder:
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 for dz in (-1, 0, 1):
-                    space.append(1.0 if self.world.is_position_blocked(x + dx, y + dy, z+ dz)
+                    space.append(1.0 if self.is_position_blocked(x + dx, y + dy, z+ dz)
                                  else 0.0)
         return space
     
+    def local_occupancy_grid(self, x, y, z):
+        """Alias for local_occupancy_grid_3x3 for compatibility"""
+        return self.local_occupancy_grid_3x3(x, y, z)
+    
     def _closest_obstacle_distance(self, x, y, z):
         #distance from pos to the nearest hot zone
-        if not self.world.sphericalObstacles:
+        if not self.sphericalObstacles:
             return np.inf
-        dists = [max(0.0, np.linalg.norm([x - cx, y - cy, z, cz] - r))
-                 for cx, cy, cz, r in self.world.sphericalObstacles]
+        dists = [max(0.0, np.linalg.norm([x - cx, y - cy, z - cz]) - r)
+                 for cx, cy, cz, r in self.sphericalObstacles]
         return min(dists)
+    
+    def min_distance_to_spheres(self, x, y, z):
+        """Get minimum distance to any spherical obstacle"""
+        return self._closest_obstacle_distance(x, y, z)
     
     def add_obstacle(self, x, y, z, radius= 0.0):
         """Add an obstacle at the specified coordinates"""
