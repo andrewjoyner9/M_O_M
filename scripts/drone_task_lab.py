@@ -136,7 +136,62 @@ class DroneVectorTask(DirectRLEnv):
 
 
 # --------------------------------------------------------------------- #
-# 3.  Minimal Hydra entry to smoke-test                                 #
+# 3.  Training integration and utilities                               #
+# --------------------------------------------------------------------- #
+def train_with_advanced_rl(algorithm='ppo', timesteps=100000, use_dreamerv3=False):
+    """
+    Train drone navigation using advanced RL algorithms
+    
+    Args:
+        algorithm: 'ppo', 'sac', or 'dreamerv3'
+        timesteps: Number of training timesteps
+        use_dreamerv3: Whether to use DreamerV3 (model-based RL)
+    """
+    print(f"🚁 Training DroneVectorTask with {algorithm.upper()}")
+    print(f"Timesteps: {timesteps:,}")
+    
+    try:
+        if use_dreamerv3 or algorithm == 'dreamerv3':
+            # Use DreamerV3 training
+            from train_advanced_rl import ComparisonTrainer
+            config = {
+                'algorithms': ['dreamerv3'],
+                'environment': 'isaac_lab',
+                'total_timesteps': timesteps,
+                'num_envs': 16,
+                'dreamerv3_config': {
+                    'learning_rate': 1e-4,
+                    'imagination_horizon': 15
+                }
+            }
+            trainer = ComparisonTrainer()
+            trainer.config = config
+            results = trainer.run_comparison()
+            print(f"✓ DreamerV3 training completed: {results}")
+            
+        else:
+            # Use traditional PPO/SAC training
+            from train_drone_ppo import train_ppo_agent, create_ppo_config
+            
+            # Create configuration
+            env_cfg = DroneLabCfg()
+            ppo_cfg = create_ppo_config(
+                total_timesteps=timesteps,
+                learning_rate=3e-4,
+                batch_size=2048
+            )
+            
+            # Train
+            result = train_ppo_agent(env_cfg, ppo_cfg)
+            print(f"✓ {algorithm.upper()} training completed: {result}")
+            
+    except ImportError as e:
+        print(f"⚠️ Advanced training not available: {e}")
+        print("Running basic smoke test instead...")
+        main()
+
+# --------------------------------------------------------------------- #
+# 4.  Minimal Hydra entry to smoke-test                                #
 # --------------------------------------------------------------------- #
 def main(_cfg=None):
     env = DroneVectorTask(DroneLabCfg)
@@ -150,6 +205,12 @@ def main(_cfg=None):
         if done.any():
             env.reset_idx(done.nonzero(as_tuple=True)[0])
     print("✓ smoke-test passed.")
+    
+    # Demonstrate advanced RL integration
+    print("\n🌟 Advanced RL Integration Available!")
+    print("To train with DreamerV3: train_with_advanced_rl('dreamerv3', 50000)")
+    print("To train with PPO: train_with_advanced_rl('ppo', 100000)")
+    print("For comparison: python train_advanced_rl.py --algorithms ppo dreamerv3")
 
 
 if __name__ == "__main__":

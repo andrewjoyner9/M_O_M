@@ -77,16 +77,16 @@ class ImprovedDreamerV3Trainer:
         
         # Training state
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.pathfinder = SimplifiedPathfinder()
+        self.pathfinder = SimplifiedPathfinder(resolution=0.5)  # Balanced resolution (2 cells per meter) for better performance
         self.shared_scenario = None
         self.best_agent_state = None
         self.best_agent_performance = float('-inf')  # Track best performance score (higher is better)
         self.successful_agent_pool = []  # Track multiple successful agents for diverse evolution
         self.historical_agent_pool = []  # ENHANCED: Track well-performing agents from previous iterations
-        self.max_parent_pool_size = 3   # Keep top 3 successful agents as parents
-        self.max_historical_pool_size = 5  # Keep top 5 historical agents for "fresh" diversity
+        self.max_parent_pool_size = 10   # Keep top 10 successful agents as parents
+        self.max_historical_pool_size = 20  # Keep top 20 historical agents for "fresh" diversity
         self.consecutive_successes = 0
-        self.current_scenario_goals_used = []  # Track goals used for current scenario
+        self.current_scenario_count = 0  # Track different obstacle layouts for current fixed route
         self.scenario_success_threshold = 0.5  # 50% success rate threshold for goal advancement
         self.iteration_results = []
         self.historical_rewards = {}  # Store rewards by iteration: {iteration_num: {agent_id: best_reward}}
@@ -112,10 +112,13 @@ class ImprovedDreamerV3Trainer:
         print(f"   • Success sampling ratio: {self.success_sample_ratio*100:.1f}%")
     
     def setup_pathfinder_for_env(self, env: SimpleDroneEnv) -> bool:
-        """Setup pathfinder with environment obstacles"""
+        """Setup pathfinder with environment obstacles and arena bounds"""
         try:
             # Clear existing obstacles
             self.pathfinder.clear_obstacles()
+            
+            # Set arena bounds for safe pathfinding
+            self.pathfinder.set_arena_bounds(env.arena_min, env.arena_max)
             
             # Add spherical obstacles from environment
             for i, obs_pos in enumerate(env.obstacle_positions):
@@ -153,7 +156,7 @@ class ImprovedDreamerV3Trainer:
     
     def _calculate_episode_quality_score(self, reward: float, distance: float, success: bool, episode_length: int) -> float:
         """
-        CRITICAL FIX: Enhanced quality scoring that properly rewards goal-seeking behavior
+        Enhanced adaptive quality scoring that properly rewards goal-seeking behavior
         
         Args:
             reward: Episode total reward
@@ -176,17 +179,59 @@ class ImprovedDreamerV3Trainer:
             
             return base_quality + distance_bonus + reward_bonus
         else:
-            # FAILURE: Score based on progress toward goal
-            # CRITICAL FIX: Reward progress instead of just penalizing failure
-            progress_quality = max(0.1, (15 - distance) / 15)  # Progress toward goal
+            # FAILURE: Adaptive scoring based on progress and relative performance
             
-            # Penalize crashes harshly
-            if reward < -2500:
-                return 0.05  # Crash penalty
-            elif reward < -2000:
-                return progress_quality * 0.3  # Heavy penalty
+            # 1. Distance-based progress (most important factor)
+            # Scale: 0.1 (very far) to 1.0 (very close)
+            max_arena_distance = 30.0  # Approximate max distance in 20x20 arena
+            progress_quality = max(0.1, 1.0 - (distance / max_arena_distance))
+            
+            # 2. More generous reward evaluation
+            # Instead of punishing all negative performance, focus on relative progress
+            step_penalty_estimate = -0.02 * episode_length
+            
+            # Calculate how much worse the reward is than just step penalties
+            # This helps identify crashes vs. poor navigation
+            reward_severity = reward - (step_penalty_estimate - 200)  # Allow for some navigation penalties
+            
+            # Normalize reward factor (0 = terrible crash, 1 = good navigation)
+            # Use a more forgiving scale
+            if reward_severity > -1000:
+                reward_factor = 1.0  # Good navigation
+            elif reward_severity > -3000:
+                reward_factor = 0.7  # Moderate navigation issues
+            elif reward_severity > -6000:
+                reward_factor = 0.4  # Poor navigation but learning
             else:
-                return progress_quality * 0.6   # Moderate penalty with progress reward
+                reward_factor = 0.1  # Severe crashes
+            
+            # 3. Distance-focused quality with reward modulation
+            if distance < 2.5:
+                # Very close to goal - always high quality
+                base_multiplier = 0.9
+                final_multiplier = base_multiplier * (0.7 + 0.3 * reward_factor)  # 0.63-0.9
+            elif distance < 5.0:
+                # Close to goal - high quality with some reward consideration
+                base_multiplier = 0.7
+                final_multiplier = base_multiplier * (0.5 + 0.5 * reward_factor)  # 0.35-0.7
+            elif distance < 10.0:
+                # Moderate progress - balanced distance/reward weighting
+                base_multiplier = 0.5
+                final_multiplier = base_multiplier * (0.3 + 0.7 * reward_factor)  # 0.15-0.5
+            elif distance < 15.0:
+                # Some progress - reward becomes more important
+                base_multiplier = 0.3
+                final_multiplier = base_multiplier * (0.2 + 0.8 * reward_factor)  # 0.06-0.3
+            else:
+                # Far from goal - heavily dependent on reward quality
+                base_multiplier = 0.15
+                final_multiplier = base_multiplier * (0.1 + 0.9 * reward_factor)  # 0.015-0.15
+            
+            quality_multiplier = max(0.05, min(0.95, final_multiplier))
+            
+            final_quality = progress_quality * quality_multiplier
+            
+            return max(0.05, final_quality)  # Minimum quality floor
     
     def adaptive_pathfinder_guidance(self, iteration_num):
         """CRITICAL FIX: Calculate adaptive guidance based on learning progress"""
@@ -233,20 +278,20 @@ class ImprovedDreamerV3Trainer:
             
         return metrics
     
-    def should_advance_to_new_goal(self, iteration_num: int, current_success_rate: float) -> bool:
-        """Determine if we should advance to a new goal based on success rate"""
+    def should_advance_to_new_scenario(self, iteration_num: int, current_success_rate: float) -> bool:
+        """Determine if we should advance to a new randomized scenario based on success rate"""
         # Always advance on first iteration
         if iteration_num <= 1:
             return True
             
-        # If success rate is above threshold (50%), agents have mastered this goal
+        # If success rate is above threshold (50%), agents have mastered this scenario
         if current_success_rate >= self.scenario_success_threshold:
-            print(f"   🎯 Goal mastery achieved: {current_success_rate:.1%} success rate (≥ {self.scenario_success_threshold:.1%})")
-            print(f"   🔄 Advancing to new goal for continued learning")
+            print(f"   🎯 Scenario mastery achieved: {current_success_rate:.1%} success rate (≥ {self.scenario_success_threshold:.1%})")
+            print(f"   🔄 Advancing to new randomized obstacle layout for continued learning")
             return True
         else:
-            print(f"   📚 Continuing with current goal: {current_success_rate:.1%} success rate (< {self.scenario_success_threshold:.1%})")
-            print(f"   🎓 Agents still learning basic pathfinding on this scenario")
+            print(f"   📚 Continuing with current scenario: {current_success_rate:.1%} success rate (< {self.scenario_success_threshold:.1%})")
+            print(f"   🎓 Agents still learning basic pathfinding on this obstacle layout")
             return False
     
     def _find_best_failed_trajectory(self, all_trajectories: List[List], goal_position: np.ndarray) -> List:
@@ -277,16 +322,30 @@ class ImprovedDreamerV3Trainer:
     
     def create_guided_training_sequence(self, env: SimpleDroneEnv, 
                                       optimal_path: List[Tuple[float, float, float]]) -> List[Tuple[np.ndarray, np.ndarray]]:
-        """Create guided training sequence with better action mapping"""
+        """Create guided training sequence with better action mapping and bounds validation"""
         guidance_sequences = []
+        
+        # Validate that the optimal path stays within arena bounds
+        valid_path = []
+        for i, waypoint in enumerate(optimal_path):
+            x, y, z = waypoint
+            if (x >= env.arena_min[0] + 0.5 and x <= env.arena_max[0] - 0.5 and
+                y >= env.arena_min[1] + 0.5 and y <= env.arena_max[1] - 0.5 and
+                z >= env.arena_min[2] + 0.5 and z <= env.arena_max[2] - 0.5):
+                valid_path.append(waypoint)
+            else:
+                print(f"   ⚠️ Waypoint {i} outside safe arena bounds: {waypoint}")
+        
+        if len(valid_path) < len(optimal_path):
+            print(f"   🛡️ Filtered path: {len(optimal_path)} → {len(valid_path)} waypoints for safety")
         
         # Start from current drone position
         obs = env.reset()
         
-        # Follow optimal path with more careful action computation
-        for i in range(len(optimal_path) - 1):
-            current_pos = np.array(optimal_path[i])
-            next_pos = np.array(optimal_path[i + 1])
+        # Follow filtered optimal path with more careful action computation
+        for i in range(len(valid_path) - 1):
+            current_pos = np.array(valid_path[i])
+            next_pos = np.array(valid_path[i + 1])
             
             # Calculate smoothed action
             direction = next_pos - current_pos
@@ -296,7 +355,9 @@ class ImprovedDreamerV3Trainer:
                 # Scale action based on distance - closer positions get smaller actions
                 scale_factor = min(1.0, direction_norm / 2.0)  # Smooth scaling
                 action = (direction / direction_norm) * scale_factor
-                action = np.clip(action, -1.0, 1.0)
+                
+                # SAFETY: Conservative action scaling for pathfinder guidance
+                action = np.clip(action, -0.5, 0.5)  # Very conservative for guidance
             else:
                 action = np.zeros(3)
             
@@ -364,9 +425,12 @@ class ImprovedDreamerV3Trainer:
                     agent_action = agent.get_action(obs)
                     mix_ratio = max(0.1, 1.0 - (step / len(guidance_sequence)))  # Decreasing guidance
                     action = mix_ratio * guided_action + (1 - mix_ratio) * agent_action
-                    action = np.clip(action, -1.0, 1.0)
+                    
+                    # SAFETY: Extra conservative clipping to prevent out-of-bounds
+                    action = np.clip(action, -0.8, 0.8)  # More conservative than -1.0, 1.0
                 else:
                     action = agent.get_action(obs)
+                    action = np.clip(action, -1.0, 1.0)
                 
                 # Take step
                 next_obs, reward, done, info = env.step(action)
@@ -385,6 +449,18 @@ class ImprovedDreamerV3Trainer:
                 
                 if done:
                     episode_success = info.get('success', False)
+                    # DEBUGGING: Log why episode ended during guidance
+                    if not episode_success:
+                        termination_reason = []
+                        if info.get('out_of_bounds', False):
+                            termination_reason.append(f"OUT_OF_BOUNDS (pos: {env.drone_position})")
+                        if info.get('collision', False):
+                            termination_reason.append("COLLISION")
+                        if env.current_step >= env.max_steps:
+                            termination_reason.append("MAX_STEPS")
+                        
+                        termination_info = " | ".join(termination_reason) if termination_reason else "UNKNOWN"
+                        print(f"   ⚠️ EARLY TERMINATION during guidance at step {step}/{guidance_steps}: {termination_info}")
                     break
             
             # Phase 2: Pure agent training (if episode not done)
@@ -445,7 +521,11 @@ class ImprovedDreamerV3Trainer:
                     episode_reward, final_distance, False, len(trajectory)
                 )
                 
+                # Enhanced logging to show quality scoring breakdown
+                expected_baseline = -0.02 * len(trajectory) - 100
+                relative_performance = (episode_reward - expected_baseline) / abs(expected_baseline)
                 print(f"   📊 Episode {episode+1}: Failed. Distance: {final_distance:.2f}m, Reward: {episode_reward:.1f}, Quality: {episode_quality:.2f}")
+                print(f"      └─ Steps: {len(trajectory)}, Expected: {expected_baseline:.1f}, Relative: {relative_performance:.2f}")
                 
                 # Add failed episode with quality-based priority (learn from better failures)
                 if episode_experiences:
@@ -525,7 +605,7 @@ class ImprovedDreamerV3Trainer:
             if self.current_iteration > 1:
                 previous_result = self.iteration_results[-1] if self.iteration_results else None
                 previous_success_rate = previous_result.get('success_rate', 0) / 100.0 if previous_result else 0
-                if not self.should_advance_to_new_goal(self.current_iteration, previous_success_rate):
+                if not self.should_advance_to_new_scenario(self.current_iteration, previous_success_rate):
                     # Keep the current goal
                     goal_position = np.array(self.shared_scenario['goal_position'])
                     print(f"   🎯 Maintaining current goal for mastery: {tuple(goal_position)}")
@@ -598,6 +678,186 @@ class ImprovedDreamerV3Trainer:
         
         return scenario
     
+    def create_enhanced_scenario_with_fixed_points(self) -> Dict[str, Any]:
+        """Create enhanced scenario with fixed start/end points and randomized obstacles.
+        
+        Features:
+        - First iteration: Empty environment (no obstacles) to train goal-seeking
+        - Subsequent iterations: Randomized obstacles after 50% success rate achieved
+        - Fixed start point at [8.0, -8.0, 2.0] 
+        - Fixed goal point at [-8.0, 8.0, 8.0]
+        - 20x20 arena with varied obstacle sizes and positions
+        """
+        current_iteration = getattr(self, 'current_iteration', 1)
+        
+        if current_iteration == 1:
+            print("🟢 Creating EMPTY environment for first iteration (goal-seeking training)")
+        else:
+            print("🔴 Creating enhanced scenario with randomized obstacles...")
+        
+        # Enhanced configuration for 20x20 arena
+        config = {
+            'arena_size': 20.0,  # Increased from 16.0
+            'arena_height': 10.0,
+            'max_steps': 1500,  # Increased for larger arena and longer distances
+            'num_obstacles': 12 if current_iteration > 1 else 0,  # No obstacles for first iteration
+            'obstacle_radius_range': [0.5, 2.5],  # Wider range for variety
+            'difficulty_level': 'enhanced',
+            'max_velocity': 4.0,  # Significantly increased for 20x20 arena (was 2.5)
+            'max_acceleration': 6.0,  # Increased for quicker acceleration
+            'goal_threshold': 2.0,
+            'obstacle_clearance': 2.5
+        }
+        
+        # Fixed start and goal positions
+        start_position = np.array([8.0, -8.0, 2.0])   # Upper right corner
+        goal_position = np.array([-8.0, 8.0, 8.0])  # Lower left corner
+        
+        print(f"   ✓ Fixed start: {tuple(start_position)}")
+        print(f"   ✓ Fixed goal: {tuple(goal_position)}")
+        
+        # Generate obstacles only if not first iteration
+        if current_iteration == 1:
+            print("   🟢 No obstacles - empty environment for goal-seeking training")
+            obstacles = {'positions': [], 'radii': []}
+        else:
+            print(f"   🔴 Generating {config['num_obstacles']} randomized obstacles...")
+            # Use iteration-based seed for randomized obstacles each training cycle
+            iteration_seed = current_iteration * 123 + 456
+            random.seed(iteration_seed)
+            np.random.seed(iteration_seed)
+            
+            # Generate randomized obstacles
+            obstacles = self._generate_randomized_obstacles(config, start_position, goal_position)
+            
+            # Reset random seed to default
+            random.seed()
+            np.random.seed()
+        
+        scenario = {
+            'arena_size': (config['arena_size'], config['arena_size'], config['arena_height']),
+            'start_position': start_position,
+            'goal_position': goal_position,
+            'obstacle_positions': obstacles['positions'],
+            'obstacle_radii': obstacles['radii'],
+            'max_episode_steps': config['max_steps'],
+            'config': config,
+            'is_empty_environment': current_iteration == 1  # Track if this is empty environment
+        }
+        
+        start_goal_distance = np.linalg.norm(scenario['goal_position'] - scenario['start_position'])
+        
+        print(f"   ✓ Arena: {scenario['arena_size'][0]:.1f}x{scenario['arena_size'][1]:.1f}x{scenario['arena_size'][2]:.1f}m")
+        if current_iteration == 1:
+            print(f"   ✓ Total obstacles: 0 (empty environment)")
+            print(f"   ✓ Training mode: Goal-seeking behavior learning")
+        else:
+            print(f"   ✓ Total obstacles: {len(scenario['obstacle_positions'])}")
+            print(f"   ✓ Ground obstacles: {len([obs for i, obs in enumerate(obstacles['positions']) if obs[2] <= 3.0])}")
+            print(f"   ✓ Air obstacles: {len([obs for i, obs in enumerate(obstacles['positions']) if obs[2] > 3.0])}")
+        print(f"   ✓ Challenge distance: {start_goal_distance:.1f}m")
+        
+        return scenario
+    
+    def _generate_randomized_obstacles(self, config: Dict[str, Any], start_pos: np.ndarray, goal_pos: np.ndarray) -> Dict[str, Any]:
+        """Generate randomized obstacles with ground/air distribution and varied sizes."""
+        total_obstacles = config['num_obstacles']
+        ground_obstacles_count = int(total_obstacles * 0.7)  # 70% ground
+        air_obstacles_count = total_obstacles - ground_obstacles_count  # 30% air
+        
+        obstacle_positions = []
+        obstacle_radii = []
+        arena_size = config['arena_size']
+        arena_height = config['arena_height']
+        
+        # Generate ground obstacles (70% of total)
+        print(f"   🌍 Generating {ground_obstacles_count} ground obstacles...")
+        for i in range(ground_obstacles_count):
+            attempts = 0
+            max_attempts = 100
+            
+            while attempts < max_attempts:
+                # Ground obstacles: z between 0.5 and 3.0
+                x = random.uniform(-arena_size/2 + 2, arena_size/2 - 2)
+                y = random.uniform(-arena_size/2 + 2, arena_size/2 - 2)
+                z = random.uniform(0.5, 3.0)  # Ground level
+                pos = np.array([x, y, z])
+                
+                # Varied sizes for ground obstacles (small and large)
+                if i % 3 == 0:  # Every third obstacle is large
+                    radius = random.uniform(1.5, 2.5)  # Large obstacles
+                else:
+                    radius = random.uniform(0.5, 1.0)  # Small obstacles
+                
+                # Check clearance from start and goal
+                start_distance = np.linalg.norm(pos - start_pos)
+                goal_distance = np.linalg.norm(pos - goal_pos)
+                
+                if (start_distance > radius + 3.0 and 
+                    goal_distance > radius + 3.0 and
+                    self._check_obstacle_clearance(pos, radius, obstacle_positions, obstacle_radii, 2.0)):
+                    
+                    obstacle_positions.append(pos)
+                    obstacle_radii.append(radius)
+                    break
+                
+                attempts += 1
+            
+            if attempts >= max_attempts:
+                print(f"   ⚠️  Could not place ground obstacle {i+1}, skipping...")
+        
+        # Generate air obstacles (30% of total)
+        print(f"   ☁️  Generating {air_obstacles_count} air obstacles...")
+        for i in range(air_obstacles_count):
+            attempts = 0
+            max_attempts = 100
+            
+            while attempts < max_attempts:
+                # Air obstacles: z between 4.0 and arena_height - 1.0
+                x = random.uniform(-arena_size/2 + 2, arena_size/2 - 2)
+                y = random.uniform(-arena_size/2 + 2, arena_size/2 - 2)
+                z = random.uniform(4.0, arena_height - 1.0)  # Air level
+                pos = np.array([x, y, z])
+                
+                # Medium size for air obstacles
+                radius = random.uniform(0.8, 1.5)
+                
+                # Check clearance from start and goal
+                start_distance = np.linalg.norm(pos - start_pos)
+                goal_distance = np.linalg.norm(pos - goal_pos)
+                
+                if (start_distance > radius + 3.0 and 
+                    goal_distance > radius + 3.0 and
+                    self._check_obstacle_clearance(pos, radius, obstacle_positions, obstacle_radii, 2.0)):
+                    
+                    obstacle_positions.append(pos)
+                    obstacle_radii.append(radius)
+                    break
+                
+                attempts += 1
+            
+            if attempts >= max_attempts:
+                print(f"   ⚠️  Could not place air obstacle {i+1}, skipping...")
+        
+        return {
+            'positions': obstacle_positions,
+            'radii': obstacle_radii
+        }
+    
+    def _check_obstacle_clearance(self, new_pos: np.ndarray, new_radius: float, 
+                                existing_positions: list, existing_radii: list, 
+                                min_clearance: float) -> bool:
+        """Check if new obstacle has sufficient clearance from existing obstacles."""
+        for i, existing_pos in enumerate(existing_positions):
+            existing_radius = existing_radii[i]
+            distance = np.linalg.norm(new_pos - existing_pos)
+            required_distance = new_radius + existing_radius + min_clearance
+            
+            if distance < required_distance:
+                return False
+        
+        return True
+    
     def create_env_from_scenario(self, scenario: Dict[str, Any]) -> SimpleDroneEnv:
         """Create environment from scenario with fixed start/goal positions"""
         env = SimpleDroneEnv(env_id=0, config=scenario['config'])
@@ -619,6 +879,14 @@ class ImprovedDreamerV3Trainer:
         env._fixed_goal_position = np.array(scenario['goal_position'])
         env._use_fixed_positions = True
         
+        # Set empty environment mode if this is the first iteration
+        if scenario.get('is_empty_environment', False):
+            env.set_empty_environment(True)
+            print("   🟢 Environment configured for empty mode (no obstacles)")
+        else:
+            env.set_empty_environment(False)
+            print(f"   🔴 Environment configured with {len(env.obstacle_positions)} obstacles")
+        
         return env
     
     def run_iteration(self, iteration_num: int) -> Dict[str, Any]:
@@ -635,20 +903,29 @@ class ImprovedDreamerV3Trainer:
             # Get the success rate from the previous iteration
             previous_result = self.iteration_results[-1] if self.iteration_results else None
             previous_success_rate = previous_result.get('success_rate', 0) / 100.0 if previous_result else 0
-            should_advance = self.should_advance_to_new_goal(iteration_num, previous_success_rate)
+            should_advance = self.should_advance_to_new_scenario(iteration_num, previous_success_rate)
         
         if iteration_num == 1:
-            print("   🌱 Starting from scratch with enhanced training")
-            self.shared_scenario = self.create_persistent_scenario()
-            self.current_scenario_goals_used = [tuple(self.shared_scenario['goal_position'])]
+            print("   🟢 FIRST ITERATION: Starting with EMPTY environment for goal-seeking training")
+            print("   🎯 Agents will learn basic navigation without obstacles first")
+            self.shared_scenario = self.create_enhanced_scenario_with_fixed_points()
+            self.current_scenario_count = 1
         elif should_advance:
-            print(f"   🧬 Evolving from best agents (consecutive successes: {self.consecutive_successes})")
-            print("   🎯 Creating new goal scenario for continued challenge")
-            self.shared_scenario = self.create_persistent_scenario()
-            self.current_scenario_goals_used.append(tuple(self.shared_scenario['goal_position']))
+            previous_result = self.iteration_results[-1] if self.iteration_results else None
+            previous_success_rate = previous_result.get('success_rate', 0) / 100.0 if previous_result else 0
+            
+            if iteration_num == 2 and previous_success_rate >= self.scenario_success_threshold:
+                print("   🔄 TRANSITION: Empty environment mastered - introducing obstacles!")
+                print(f"   ✅ Previous success rate: {previous_success_rate:.1%} (≥ {self.scenario_success_threshold:.1%})")
+            else:
+                print(f"   🧬 Evolving from best agents (consecutive successes: {self.consecutive_successes})")
+                print("   🎯 Creating new randomized scenario for continued challenge")
+            
+            self.shared_scenario = self.create_enhanced_scenario_with_fixed_points()
+            self.current_scenario_count = getattr(self, 'current_scenario_count', 0) + 1
         else:
             print(f"   🧬 Evolving from best agents (consecutive successes: {self.consecutive_successes})")
-            print("   📚 Continuing with current goal for mastery learning")
+            print("   📚 Continuing with current scenario for mastery learning")
             # Keep the same scenario but allow agents to continue learning
         
         # Setup pathfinder
@@ -835,7 +1112,7 @@ class ImprovedDreamerV3Trainer:
             'avg_successful_reward': np.mean(successful_rewards) if successful_rewards else -1500,
             'reward_improvement': quality_metrics.get('reward_quality_improvement', 0),
             'goal_position': tuple(self.shared_scenario['goal_position']),  # Track current goal
-            'goals_used_count': len(getattr(self, 'current_scenario_goals_used', [])),  # Track goal progression
+            'scenario_count': getattr(self, 'current_scenario_count', 0),  # Track scenario progression
             'goal_advancement_logic': 'adaptive_curriculum'  # Mark as using adaptive curriculum
         }
         
@@ -843,13 +1120,13 @@ class ImprovedDreamerV3Trainer:
         print(f"      • Successes: {successes}/{self.agents_per_iteration} ({successes/self.agents_per_iteration:.1%})")
         print(f"      • Training time: {iteration_result['training_time']:.1f}s")
         print(f"      • Pathfinder waypoints: {len(optimal_path)}")
-        print(f"      • Goal: {iteration_result['goal_position']} (goal #{iteration_result['goals_used_count']})")
+        print(f"      • Goal: {iteration_result['goal_position']} (scenario #{iteration_result['scenario_count']})")
         if iteration_num > 1:
             previous_goal = self.iteration_results[-1].get('goal_position', 'Unknown') if self.iteration_results else 'Unknown'
             if iteration_result['goal_position'] == previous_goal:
-                print(f"      • 📚 Mastery learning: Continuing with same goal for skill development")
+                print(f"      • 📚 Mastery learning: Continuing with same scenario for skill development")
             else:
-                print(f"      • 🎯 Goal advanced: Agents ready for new challenge")
+                print(f"      • 🎯 Scenario advanced: New randomized obstacle layout for continued challenge")
         
         # Enhanced quality reporting
         if successes > 0:
@@ -1189,53 +1466,186 @@ class ImprovedDreamerV3Trainer:
 
 
 def main():
-    """Main training function with enhanced boundary-aware learning"""
+    """Enhanced main training function with command-line options"""
+    import argparse
     
-    # Configuration
-    max_iterations = 50  # Maximum iterations if target not reached
-    consecutive_target = 3  # Number of consecutive iterations to evaluate
-    target_success_rate = 0.9  # 90% success rate target
+    parser = argparse.ArgumentParser(description='Enhanced DreamerV3 Drone Training')
+    parser.add_argument('--mode', choices=['original', 'enhanced'], default='enhanced',
+                       help='Training mode: original (varied goals) or enhanced (fixed route with randomized obstacles)')
+    parser.add_argument('--max-iterations', type=int, default=50, 
+                       help='Maximum number of training iterations (default: 50)')
+    parser.add_argument('--agents-per-iteration', type=int, default=12,
+                       help='Number of agents per iteration (default: 12)')
+    parser.add_argument('--episodes-per-agent', type=int, default=25,
+                       help='Episodes per agent (default: 25)')
+    parser.add_argument('--test-only', action='store_true',
+                       help='Only test scenario generation without training')
+    parser.add_argument('--target-success-rate', type=float, default=0.9,
+                       help='Target success rate for original mode (default: 0.9)')
+    parser.add_argument('--consecutive-target', type=int, default=5,
+                       help='Consecutive iterations for original mode evaluation (default: 5)')
     
-    # Create trainer
-    trainer = ImprovedDreamerV3Trainer(
-        agents_per_iteration=12,
-        target_successes=6,  # 6/12 = 50% success rate per iteration minimum
-        max_episode_steps=1000,
-        training_episodes_per_agent=20
-    )
+    args = parser.parse_args()
     
-    print(f"🤖 Using device: {trainer.device}")
-    print(f"🎯 Training Goal: {target_success_rate:.0%} success rate over {consecutive_target} consecutive iterations")
-    print(f"📊 Evaluation: Average of {consecutive_target} most recent iterations")
-    print(f"🔧 Enhanced: Boundary-aware reward system prevents ceiling/ground seeking")
+    print("🚁 DreamerV3 Drone Training System")
+    print("=" * 50)
     
-    # Run evolution with new success criteria
-    try:
-        learning_stats = trainer.run_evolution(
-            max_iterations=max_iterations,
-            consecutive_success_target=consecutive_target,
-            target_success_rate=target_success_rate
-        )
-        
-        print(f"\n🎯 Training completed! Final statistics:")
-        if learning_stats['success_rates']:
-            print(f"   📈 Success rate progression: {learning_stats['success_rates'][:5]}...{learning_stats['success_rates'][-3:]}")
-            print(f"   🎯 Final success rate: {learning_stats['success_rates'][-1]:.1f}%")
+    if args.mode == 'enhanced':
+        print("🎯 Enhanced Mode Features:")
+        print("   • Fixed route: [8,8,2] → [-8,-8,2]")
+        print("   • 20x20 meter arena")
+        print("   • Randomized obstacles per iteration")
+        print("   • 70% ground obstacles, 30% air obstacles")
+        print("   • Varied obstacle sizes")
+        print("   • 50% success rate curriculum")
+    else:
+        print("🎯 Original Mode Features:")
+        print("   • Persistent obstacles with varied goals")
+        print("   • 16x16 meter arena")
+        print("   • Mastery-based goal progression")
+        print(f"   • Target: {args.target_success_rate:.0%} success rate")
+    print()
+    
+    if args.test_only:
+        print("🧪 Running test mode only...")
+        if args.mode == 'enhanced':
+            # Test enhanced scenario generation
+            trainer = ImprovedDreamerV3Trainer()
+            trainer.current_iteration = 1
             
-            # Calculate if target was achieved
-            final_rates = learning_stats['success_rates'][-consecutive_target:]
-            if len(final_rates) >= consecutive_target:
-                final_avg = np.mean(final_rates)
-                print(f"   🏆 Final {consecutive_target}-iteration average: {final_avg:.1f}%")
-                if final_avg >= target_success_rate * 100:
-                    print(f"   ✅ TARGET ACHIEVED: {final_avg:.1f}% ≥ {target_success_rate:.0%}")
+            print("Testing enhanced scenario generation...")
+            scenario = trainer.create_enhanced_scenario_with_fixed_points()
+            
+            print(f"✓ Scenario created successfully:")
+            print(f"  • Arena: {scenario['arena_size'][0]}x{scenario['arena_size'][1]}m")
+            print(f"  • Start: {tuple(scenario['start_position'])}")
+            print(f"  • Goal: {tuple(scenario['goal_position'])}")
+            print(f"  • Obstacles: {len(scenario['obstacle_positions'])}")
+            
+            # Count ground vs air obstacles
+            ground_obs = sum(1 for pos in scenario['obstacle_positions'] if pos[2] <= 3.0)
+            air_obs = len(scenario['obstacle_positions']) - ground_obs
+            total_obs = len(scenario['obstacle_positions'])
+            
+            ground_percentage = (ground_obs / total_obs) * 100 if total_obs > 0 else 0
+            air_percentage = (air_obs / total_obs) * 100 if total_obs > 0 else 0
+            
+            print(f"  • Ground obstacles: {ground_obs} ({ground_percentage:.1f}%)")
+            print(f"  • Air obstacles: {air_obs} ({air_percentage:.1f}%)")
+        else:
+            # Test original scenario generation
+            trainer = ImprovedDreamerV3Trainer()
+            scenario = trainer.create_persistent_scenario()
+            print(f"✓ Original scenario created successfully:")
+            print(f"  • Arena: {scenario['arena_size'][0]}x{scenario['arena_size'][1]}m")
+            print(f"  • Start: {tuple(scenario['start_position'])}")
+            print(f"  • Goal: {tuple(scenario['goal_position'])}")
+            print(f"  • Obstacles: {len(scenario['obstacle_positions'])}")
+        return
+    
+    # Create and configure trainer
+    if args.mode == 'enhanced':
+        trainer = ImprovedDreamerV3Trainer(
+            agents_per_iteration=args.agents_per_iteration,
+            target_successes=int(args.agents_per_iteration * 0.5),  # 50% success rate
+            max_episode_steps=2500,  # Increased for 20x20 arena and longer distances
+            training_episodes_per_agent=args.episodes_per_agent
+        )
+    else:
+        trainer = ImprovedDreamerV3Trainer(
+            agents_per_iteration=12,
+            target_successes=6,  # 6/12 = 50% success rate per iteration minimum
+            max_episode_steps=1000,
+            training_episodes_per_agent=20
+        )
+    
+    print(f"⚙️ Training Configuration:")
+    print(f"   • Mode: {args.mode}")
+    print(f"   • Max iterations: {args.max_iterations}")
+    print(f"   • Agents per iteration: {trainer.agents_per_iteration}")
+    print(f"   • Episodes per agent: {trainer.training_episodes_per_agent}")
+    print(f"   • Device: {trainer.device}")
+    print()
+    
+    try:
+        if args.mode == 'enhanced':
+            # Use the enhanced training with fixed points
+            print(f"🎯 Enhanced Training Goal: 50% success rate per iteration with adaptive scenario progression")
+            print(f"📊 Evaluation: Each iteration uses new randomized obstacle layout when mastered")
+            print(f"🔧 Enhanced: Fixed start/goal with varied obstacles for robust navigation learning")
+            
+            learning_stats = trainer.run_evolution(
+                max_iterations=args.max_iterations,
+                consecutive_success_target=args.consecutive_target,
+                target_success_rate=args.target_success_rate
+            )
+            
+            print(f"\n🎉 Enhanced Training Complete!")
+            if learning_stats['success_rates']:
+                print(f"   📈 Success rate progression: {learning_stats['success_rates'][:5]}...{learning_stats['success_rates'][-3:]}")
+                print(f"   🎯 Final success rate: {learning_stats['success_rates'][-1]:.1f}%")
+                
+                # Calculate if target was achieved
+                final_rates = learning_stats['success_rates'][-args.consecutive_target:]
+                if len(final_rates) >= args.consecutive_target:
+                    final_avg = np.mean(final_rates)
+                    print(f"   🏆 Final {args.consecutive_target}-iteration average: {final_avg:.1f}%")
+                    if final_avg >= args.target_success_rate * 100:
+                        print(f"   ✅ TARGET ACHIEVED: {final_avg:.1f}% ≥ {args.target_success_rate:.0%}")
+                    else:
+                        print(f"   ❌ Target missed: {final_avg:.1f}% < {args.target_success_rate:.0%}")
+            
+            # Save results summary
+            summary_path = os.path.join(os.path.dirname(__file__), 'enhanced_training_results.txt')
+            with open(summary_path, 'w') as f:
+                f.write("Enhanced DreamerV3 Training Results\n")
+                f.write("=" * 40 + "\n\n")
+                f.write(f"Configuration:\n")
+                f.write(f"- Fixed route: [8,8,2] → [-8,-8,2]\n")
+                f.write(f"- Arena size: 20x20 meters\n")
+                f.write(f"- Max iterations: {args.max_iterations}\n")
+                f.write(f"- Agents per iteration: {trainer.agents_per_iteration}\n")
+                f.write(f"- Episodes per agent: {trainer.training_episodes_per_agent}\n\n")
+                f.write(f"Results:\n")
+                if learning_stats['success_rates']:
+                    f.write(f"- Final success rate: {learning_stats['success_rates'][-1]:.1f}%\n")
+                    f.write(f"- Iterations completed: {len(learning_stats['success_rates'])}\n")
                 else:
-                    print(f"   ❌ Target missed: {final_avg:.1f}% < {target_success_rate:.0%}")
+                    f.write(f"- Training did not complete successfully\n")
+            
+            print(f"✓ Results saved to: {summary_path}")
+            
+        else:
+            # Use the original training method
+            print(f"🎯 Training Goal: {args.target_success_rate:.0%} success rate over {args.consecutive_target} consecutive iterations")
+            print(f"📊 Evaluation: Average of {args.consecutive_target} most recent iterations")
+            print(f"🔧 Enhanced: Boundary-aware reward system prevents ceiling/ground seeking")
+            
+            learning_stats = trainer.run_evolution(
+                max_iterations=args.max_iterations,
+                consecutive_success_target=args.consecutive_target,
+                target_success_rate=args.target_success_rate
+            )
+            
+            print(f"\n🎯 Original Training completed! Final statistics:")
+            if learning_stats['success_rates']:
+                print(f"   📈 Success rate progression: {learning_stats['success_rates'][:5]}...{learning_stats['success_rates'][-3:]}")
+                print(f"   🎯 Final success rate: {learning_stats['success_rates'][-1]:.1f}%")
+                
+                # Calculate if target was achieved
+                final_rates = learning_stats['success_rates'][-args.consecutive_target:]
+                if len(final_rates) >= args.consecutive_target:
+                    final_avg = np.mean(final_rates)
+                    print(f"   🏆 Final {args.consecutive_target}-iteration average: {final_avg:.1f}%")
+                    if final_avg >= args.target_success_rate * 100:
+                        print(f"   ✅ TARGET ACHIEVED: {final_avg:.1f}% ≥ {args.target_success_rate:.0%}")
+                    else:
+                        print(f"   ❌ Target missed: {final_avg:.1f}% < {args.target_success_rate:.0%}")
         
     except KeyboardInterrupt:
-        print("\n🛑 Training interrupted by user")
+        print("\n⏹️ Training interrupted by user")
     except Exception as e:
-        print(f"\n❌ Training failed: {e}")
+        print(f"\n❌ Training failed: {str(e)}")
         import traceback
         traceback.print_exc()
 

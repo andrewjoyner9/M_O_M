@@ -65,8 +65,8 @@ class SimpleDroneEnv(BaseEnv):
         # Default configuration for realistic scenarios
         default_config = {
             'arena_size': 20.0,           # Reasonable arena for learning
-            'arena_height': 8.0,          # Reasonable height
-            'max_steps': 800,             # Long enough for complex navigation
+            'arena_height': 10.0,          # Reasonable height
+            'max_steps': 1500,             # Long enough for complex navigation
             'num_obstacles': 8,           # Moderate obstacles for learning
             'obstacle_radius_range': [0.8, 1.5],  # Reasonable obstacle sizes
             'max_velocity': 2.0,          # Moderate drone speed
@@ -98,6 +98,9 @@ class SimpleDroneEnv(BaseEnv):
         self.max_steps = self.config['max_steps']
         self.current_step = 0
         
+        # Goal approach tracking
+        self.previous_goal_distance = None
+        
         # Obstacle parameters (dynamic based on difficulty)
         self.num_obstacles = self._get_difficulty_obstacles()
         self.obstacle_positions = []
@@ -127,6 +130,10 @@ class SimpleDroneEnv(BaseEnv):
         self.episode_paths = []  # Store completed episode paths
         self.max_stored_paths = 50  # Keep last 50 episodes
         
+        # Obstacle generation control
+        self._use_obstacles = True  # By default, use obstacles
+        self._empty_environment_mode = False  # Track if we're in empty mode for first iteration
+        
         print(f"✓ Enhanced SimpleDroneEnv {env_id} created")
         print(f"  Arena: {self.config['arena_size']}x{self.config['arena_size']}x{self.config['arena_height']}")
         print(f"  Max steps: {self.config['max_steps']}")
@@ -152,6 +159,9 @@ class SimpleDroneEnv(BaseEnv):
     def reset(self) -> np.ndarray:
         """Reset environment to initial state"""
         self.current_step = 0
+        
+        # Reset goal tracking
+        self.previous_goal_distance = None
         
         # Store previous episode path if it exists
         if len(self.path_history) > 0:
@@ -233,6 +243,12 @@ class SimpleDroneEnv(BaseEnv):
         # Generate obstacles with variable sizes and strategic placement
         self.obstacle_positions = []
         self.obstacle_radii = []
+        
+        # Check if we should generate obstacles (for empty environment mode)
+        if not self._use_obstacles:
+            print("🟢 Empty environment mode: No obstacles generated")
+            return self._get_observation()
+        
         clearance = self.config['obstacle_clearance']
         
         for _ in range(self.num_obstacles):
@@ -311,12 +327,13 @@ class SimpleDroneEnv(BaseEnv):
         # Check termination
         done = self._is_done()
         
-        # Info
+                # Info
         info = {
+            'distance_to_goal': np.linalg.norm(self.drone_position - self.goal_position),
             'success': self._is_success(),
             'collision': self._is_collision(),
             'out_of_bounds': self._is_out_of_bounds(),
-            'timeout': self.current_step >= self.max_steps
+            'step': self.current_step
         }
         
         return self._get_observation(), reward, done, info
@@ -359,7 +376,28 @@ class SimpleDroneEnv(BaseEnv):
         goal_distance = np.linalg.norm(self.drone_position - self.goal_position)
         max_possible_distance = np.linalg.norm(self.arena_max - self.arena_min)
         normalized_goal_distance = goal_distance / max_possible_distance
-        reward -= normalized_goal_distance * 10.0  # Scale down distance penalty
+        
+        # Enhanced goal approach rewards with stronger gradients
+        if goal_distance < 3.0:
+            # Very close to goal - strong reward gradient
+            reward += (3.0 - goal_distance) * 15.0  # Up to +45 reward when very close
+        elif goal_distance < 6.0:
+            # Close to goal - medium reward gradient  
+            reward += (6.0 - goal_distance) * 5.0   # Up to +15 reward when close
+        
+        # Base distance penalty (scaled down from before)
+        reward -= normalized_goal_distance * 5.0  # Reduced from 10.0
+        
+        # Goal approach momentum bonus (reward getting closer)
+        if self.previous_goal_distance is not None:
+            distance_improvement = self.previous_goal_distance - goal_distance
+            if distance_improvement > 0:  # Getting closer
+                reward += distance_improvement * 2.0  # Bonus for approaching goal
+            elif distance_improvement < -0.1:  # Moving away significantly
+                reward -= abs(distance_improvement) * 1.0  # Penalty for moving away
+        
+        # Update for next step
+        self.previous_goal_distance = goal_distance
         
         # Success bonus
         if self._is_success():
@@ -461,3 +499,30 @@ class SimpleDroneEnv(BaseEnv):
             'current_position': self.drone_position.copy(),
             'steps': len(self.path_history)
         }
+    
+    def set_fixed_positions(self, start_position: np.ndarray, goal_position: np.ndarray):
+        """Set fixed start and goal positions for consistent training scenarios"""
+        self._fixed_start_position = np.array(start_position)
+        self._fixed_goal_position = np.array(goal_position)
+        self._use_fixed_positions = True
+        print(f"✓ Fixed positions set: Start {tuple(self._fixed_start_position)}, Goal {tuple(self._fixed_goal_position)}")
+    
+    def use_random_positions(self):
+        """Disable fixed positions and use random start/goal placement"""
+        self._use_fixed_positions = False
+        print("✓ Switched to random position mode")
+    
+    def set_empty_environment(self, empty: bool = True):
+        """Enable/disable empty environment mode (no obstacles)"""
+        self._use_obstacles = not empty
+        self._empty_environment_mode = empty
+        if empty:
+            print("🟢 Empty environment mode enabled - no obstacles will be generated")
+        else:
+            print("🔴 Normal environment mode enabled - obstacles will be generated")
+    
+    def enable_obstacles(self):
+        """Enable obstacle generation after empty environment training"""
+        self._use_obstacles = True
+        self._empty_environment_mode = False
+        print("🔴 Obstacles enabled - environment will now include obstacles")
