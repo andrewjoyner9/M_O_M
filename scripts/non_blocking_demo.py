@@ -1,7 +1,6 @@
 import pickle
 import omni
 from pxr import UsdGeom, Gf, Usd, UsdShade, Sdf
-import asyncio
 
 # Try to import numpy, but continue without it if not available
 try:
@@ -72,7 +71,7 @@ class SimpleIsaacPathfinder:
             sphere_geom = UsdGeom.Sphere.Define(self.stage, sphere_path)
             sphere_geom.CreateRadiusAttr(0.3)
             
-            # Position sphere (use SetTranslateOp instead of AddTranslateOp)
+            # Position sphere
             xform = UsdGeom.Xformable(sphere_geom)
             translate_op = xform.AddTranslateOp()
             translate_op.Set(Gf.Vec3f(float(x), float(y), float(z)))
@@ -147,44 +146,33 @@ class SimpleIsaacPathfinder:
         
         return []
 
-    def move_along_path(self, path):
-        """Move cube along path with automatic timing (non-blocking)"""
-        if not path:
-            print("No path to follow!")
-            return
-        
-        print(f"Path has {len(path)} steps. Moving automatically...")
-        
-        # Move through path with delays
-        import asyncio
-        import omni.kit.app
-        
-        async def move_step_by_step():
-            for i, (x, y, z) in enumerate(path):
-                print(f"Step {i+1}/{len(path)}: Moving to ({x}, {y}, {z})")
-                self.set_cube_position(x, y, z)
-                
-                # Wait for a short time before next move (non-blocking)
-                await omni.kit.app.get_app().next_update_async()
-                await asyncio.sleep(1.0)  # 1 second between moves
-        
-        # Start the async movement
-        asyncio.ensure_future(move_step_by_step())
-        print("Movement started! Watch the cube move automatically.")
 
-
-class SimplePklDemo:
+class TimerBasedDemo:
+    """Non-blocking demo using Isaac Sim's update events"""
+    
     def __init__(self, pkl_path=r"C:\Users\andre\Documents\BAH_PROJECT_2025\M_O_M\isaac-rl\improved_dreamerv3_checkpoint_iter_Working1.pkl"):
         self.pkl_path = pkl_path
         self.pathfinder = SimpleIsaacPathfinder()
         self.model_data = None
+        
+        # Demo state
+        self.current_path = []
+        self.current_step = 0
+        self.targets = [(5, 0, 0), (5, 5, 0), (0, 5, 0)]
+        self.current_target_index = 0
+        self.step_timer = 0
+        self.step_delay = 60  # frames between moves (1 second at 60fps)
+        self.demo_state = "loading"  # loading, navigating, pausing, completed
+        
+        # Subscribe to update events
+        self.update_stream = omni.kit.app.get_app().get_update_event_stream()
+        self.update_subscription = self.update_stream.create_subscription_to_pop(self.on_update)
         
     def load_model(self):
         """Load the DreamerV3 model"""
         try:
             print(f"Loading model from: {self.pkl_path}")
             
-            # Try to load the pickle file
             try:
                 with open(self.pkl_path, 'rb') as f:
                     self.model_data = pickle.load(f)
@@ -227,33 +215,10 @@ class SimplePklDemo:
         self.pathfinder.set_cube_position(0, 0, 0)
         print(f"✓ Scene ready with {len(obstacles)} obstacles")
     
-    def navigate_with_ai(self, target):
-        """Simulate AI-guided navigation"""
-        if self.model_data is None:
-            print("❌ No model loaded!")
-            return False
-        
-        # Get current position
-        current_pos = self.pathfinder.get_cube_position()
-        start = (int(current_pos[0]), int(current_pos[1]), int(current_pos[2]))
-        
-        print(f"🧠 AI planning path from {start} to {target}")
-        
-        # Find path (in real implementation, would use AI model here)
-        path = self.pathfinder.find_simple_path(start, target)
-        
-        if path:
-            print(f"✓ AI found path with {len(path)} steps")
-            self.pathfinder.move_along_path(path)
-            return True
-        else:
-            print("❌ AI could not find path")
-            return False
-    
-    def run_demo(self):
-        """Run the main demo (non-blocking)"""
+    def start_demo(self):
+        """Start the demo"""
         print("\n" + "="*50)
-        print("🚁 SIMPLE DREAMERV3 DEMO")
+        print("🚁 NON-BLOCKING DREAMERV3 DEMO")
         print("="*50)
         
         # Load model
@@ -263,36 +228,21 @@ class SimplePklDemo:
         # Setup scene
         self.setup_scene()
         
-        # Navigate to targets with automatic timing
-        targets = [(5, 0, 0), (5, 5, 0), (0, 5, 0)]
+        print(f"\n🎯 Starting navigation mission with {len(self.targets)} targets")
+        print("Demo will run automatically without freezing Isaac Sim!")
         
-        print(f"\n🎯 Starting navigation mission with {len(targets)} targets")
-        print("Watch the cube move automatically between waypoints!")
-        
-        # Start async navigation
-        import asyncio
-        
-        async def navigate_all_targets():
-            for i, target in enumerate(targets):
-                print(f"\n--- Target {i+1}/{len(targets)}: {target} ---")
-                
-                if await self.navigate_with_ai_async(target):
-                    print(f"✓ Reached target {target}")
-                    await asyncio.sleep(2.0)  # Pause between targets
-                else:
-                    print(f"❌ Failed to reach {target}")
-            
-            print("\n🎉 Demo completed!")
-        
-        # Start the navigation
-        asyncio.ensure_future(navigate_all_targets())
-        print("Demo started! Isaac Sim will remain responsive.")
+        # Start navigation
+        self.start_next_target()
     
-    async def navigate_with_ai_async(self, target):
-        """Async version of AI navigation"""
-        if self.model_data is None:
-            print("❌ No model loaded!")
-            return False
+    def start_next_target(self):
+        """Start navigation to the next target"""
+        if self.current_target_index >= len(self.targets):
+            print("\n🎉 Demo completed!")
+            self.demo_state = "completed"
+            return
+        
+        target = self.targets[self.current_target_index]
+        print(f"\n--- Target {self.current_target_index + 1}: {target} ---")
         
         # Get current position
         current_pos = self.pathfinder.get_cube_position()
@@ -305,32 +255,52 @@ class SimplePklDemo:
         
         if path:
             print(f"✓ AI found path with {len(path)} steps")
-            await self.move_along_path_async(path)
-            return True
+            self.current_path = path
+            self.current_step = 0
+            self.demo_state = "navigating"
+            self.step_timer = 0
         else:
             print("❌ AI could not find path")
-            return False
+            self.current_target_index += 1
+            self.start_next_target()
     
-    async def move_along_path_async(self, path):
-        """Async version of path movement"""
-        if not path:
-            return
-        
-        print(f"Moving through {len(path)} steps...")
-        
-        for i, (x, y, z) in enumerate(path):
-            print(f"Step {i+1}/{len(path)}: Moving to ({x}, {y}, {z})")
-            self.pathfinder.set_cube_position(x, y, z)
+    def on_update(self, event):
+        """Called every frame - handles non-blocking movement"""
+        if self.demo_state == "navigating":
+            self.step_timer += 1
             
-            # Non-blocking wait
-            import omni.kit.app
-            await omni.kit.app.get_app().next_update_async()
-            await asyncio.sleep(1.0)  # 1 second between moves
+            if self.step_timer >= self.step_delay:
+                self.step_timer = 0
+                
+                if self.current_step < len(self.current_path):
+                    x, y, z = self.current_path[self.current_step]
+                    print(f"Step {self.current_step + 1}/{len(self.current_path)}: Moving to ({x}, {y}, {z})")
+                    self.pathfinder.set_cube_position(x, y, z)
+                    self.current_step += 1
+                else:
+                    # Finished current target
+                    target = self.targets[self.current_target_index]
+                    print(f"✓ Reached target {target}")
+                    self.current_target_index += 1
+                    self.demo_state = "pausing"
+                    self.step_timer = 0
+        
+        elif self.demo_state == "pausing":
+            self.step_timer += 1
+            if self.step_timer >= self.step_delay * 2:  # 2 second pause
+                self.start_next_target()
+    
+    def stop_demo(self):
+        """Stop the demo and cleanup"""
+        if self.update_subscription:
+            self.update_subscription.unsubscribe()
+            self.update_subscription = None
+        print("Demo stopped")
 
 
 def main():
-    """Main function to run the demo"""
-    print("🚁 Simple DreamerV3 Isaac Sim Demo")
+    """Main function to run the non-blocking demo"""
+    print("🚁 Non-Blocking DreamerV3 Isaac Sim Demo")
     print("="*40)
     
     try:
@@ -342,9 +312,13 @@ def main():
         
         print("✓ Isaac Sim detected")
         
-        # Run demo
-        demo = SimplePklDemo()
-        demo.run_demo()
+        # Create and start demo
+        global demo_instance
+        demo_instance = TimerBasedDemo()
+        demo_instance.start_demo()
+        
+        print("\n📢 Demo is running! Isaac Sim will stay responsive.")
+        print("To stop the demo, run: demo_instance.stop_demo()")
         
     except Exception as e:
         print(f"❌ Error: {e}")
