@@ -718,10 +718,12 @@ class ImprovedDreamerV3Trainer:
         
         # Generate obstacles only if not first iteration
         if current_iteration == 1:
-            print("   🟢 No obstacles - empty environment for goal-seeking training")
-            obstacles = {'positions': [], 'radii': []}
+            num_placeholders = 12  # Match normal scenario
+            placeholder_pos = [np.array([999.0, 999.0, 999.0]) for _ in range(num_placeholders)]
+            placeholder_radii = [0.0 for _ in range(num_placeholders)]
+            obstacles = {'positions': placeholder_pos, 'radii': placeholder_radii}
         else:
-            print(f"   🔴 Generating {config['num_obstacles']} randomized obstacles...")
+
             # Use iteration-based seed for randomized obstacles each training cycle
             iteration_seed = current_iteration * 123 + 456
             random.seed(iteration_seed)
@@ -1261,7 +1263,10 @@ class ImprovedDreamerV3Trainer:
                 available_iterations = set(h['iteration'] for h in self.historical_agent_pool)
                 if len(available_iterations) > 1:
                     # Select from older iterations for more diversity
-                    older_agents = [h for h in self.historical_agent_pool if h['iteration'] < max(available_iterations)]
+                    #older_agents = [h for h in self.historical_agent_pool if h['iteration'] < max(available_iterations)]
+                    max_iter = max(available_iterations)
+                    recent_window = 5
+                    older_agents = [h for h in self.historical_agent_pool if max_iter - recent_window < h['iteration'] < max_iter]
                     if older_agents:
                         historical_state = older_agents[agent_idx % len(older_agents)]
                     else:
@@ -1472,8 +1477,8 @@ def main():
     parser = argparse.ArgumentParser(description='Enhanced DreamerV3 Drone Training')
     parser.add_argument('--mode', choices=['original', 'enhanced'], default='enhanced',
                        help='Training mode: original (varied goals) or enhanced (fixed route with randomized obstacles)')
-    parser.add_argument('--max-iterations', type=int, default=50, 
-                       help='Maximum number of training iterations (default: 50)')
+    parser.add_argument('--max-iterations', type=int, default=100,
+                       help='Maximum number of training iterations (default: 100)')
     parser.add_argument('--agents-per-iteration', type=int, default=12,
                        help='Number of agents per iteration (default: 12)')
     parser.add_argument('--episodes-per-agent', type=int, default=25,
